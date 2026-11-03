@@ -43,6 +43,9 @@ class RulesEngine(
   private val donInstructionExecutor = DonInstructionExecutor()
 
   fun validate(state: GameState, command: GameCommand): ValidationResult {
+    if (state.status == GameStatus.FINISHED) {
+      return ValidationResult(false, listOf(RuleViolation("GAME_FINISHED", "Game is finished")))
+    }
     return when (command) {
       is PlayCardCommand -> mainPhaseController.validatePlayCard(state, command, cardCatalog, continuousEffectProcessor)
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
@@ -55,6 +58,9 @@ class RulesEngine(
       )
 
       is UseEventCounterCommand -> battleResolver.validateEventCounter(state, command, continuousEffectProcessor)
+      is SubmitChoiceCommand -> validateSubmitChoice(state, command)
+      is ResolveMulliganCommand -> validateMulligan(state, command)
+      is ConcedeCommand -> validateConcede(state, command)
       else -> ValidationResult(true, emptyList())
     }
   }
@@ -82,6 +88,9 @@ class RulesEngine(
         state, command, continuousEffectProcessor, costProcessor, this
       )
 
+      is SubmitChoiceCommand -> processSubmitChoice(state, command)
+      is ResolveMulliganCommand -> processMulligan(state, command)
+      is ConcedeCommand -> processConcede(state, command)
       else -> GameTransition(events = emptyList(), programsToRun = emptyList())
     }
   }
@@ -95,7 +104,7 @@ class RulesEngine(
   }
 
   fun processAutomaticRules(state: GameState): GameTransition {
-    throw UnsupportedOperationException("Not implemented")
+    return ruleProcessor.processRules(state)
   }
 
   fun advancePhase(state: GameState): GameTransition {
@@ -390,14 +399,20 @@ class RulesEngine(
       }
 
       is KnockOut -> damageProcessor.executeKnockOut(
-        state, instruction, context, variables, replacementProcessor, continuous, cardCatalog
+        state, instruction, context, variables, replacementProcessor, continuousEffectProcessor, cardCatalog
       )
 
-      is DealDamage -> damageProcessor.executeDealDamage(state, instruction, context, variables, this, continuous)
+      is DealDamage -> damageProcessor.executeDealDamage(
+        state, instruction, context, variables, this, continuousEffectProcessor
+      )
+
       is SetLife -> damageProcessor.executeSetLife(state, instruction, context, variables)
 
       is Draw -> zoneInstructionExecutor.draw(state, instruction, context, variables, this)
-      is MoveCards -> zoneInstructionExecutor.moveCards(state, instruction, context, variables, this)
+      is MoveCards -> zoneInstructionExecutor.moveCards(
+        state, instruction, context, variables, this, informationManager
+      )
+
       is TrashFromHand -> zoneInstructionExecutor.trashFromHand(state, instruction, context, variables, this)
       is PlayCard -> zoneInstructionExecutor.playCard(
         state, instruction, context, variables, cardCatalog, continuousEffectProcessor, costProcessor, this
@@ -415,8 +430,503 @@ class RulesEngine(
 
       is ActivateAbility -> effectScheduler.executeActivateInstruction(state, instruction, context, variables, this)
 
+      is SelectCards -> executeSelectCards(state, instruction, context, variables)
+      is CountCards -> executeCountCards(state, instruction, context, variables)
+      is LookAtTop -> executeLookAtTop(state, instruction, context, variables)
+      is RevealCards -> executeRevealCards(state, instruction, context, variables)
+      is ChooseOption -> executeChooseOption(state, instruction, context, variables)
+      is ChooseNumber -> executeChooseNumber(state, instruction, context, variables)
+      is OrderCards -> executeOrderCards(state, instruction, context, variables)
+      is CheckCondition -> executeCheckCondition(state, instruction, context, variables)
+      is SetGameResult -> executeSetGameResult(state, instruction, context)
+
       else -> failExec("UNSUPPORTED_INSTRUCTION", "Instruction not handled: ${instruction::class.simpleName}", 0)
     }
+  }
+
+  private fun invalid(code: String, message: String): ValidationResult =
+    ValidationResult(false, listOf(RuleViolation(code, message)))
+
+  private fun emptyTransition(): GameTransition = GameTransition(emptyList(), emptyList())
+
+  private fun validateConcede(state: GameState, command: ConcedeCommand): ValidationResult {
+    if (state.players[command.playerId] == null) return invalid("UNKNOWN_PLAYER", "Player not found")
+    return ValidationResult(true, emptyList())
+  }
+
+  private fun validateSubmitChoice(state: GameState, command: SubmitChoiceCommand): ValidationResult {
+    val choice = state.pendingChoices.firstOrNull { it.id == command.choiceId } ?: return invalid(
+      "UNKNOWN_CHOICE", "Pending choice not found"
+    )
+    if (choice.playerId != command.playerId) return invalid("WRONG_PLAYER", "Player does not own this choice")
+    val error = validateChoiceAnswer(choice, command.answer)
+    if (error != null) return invalid("INVALID_ANSWER", error)
+    return ValidationResult(true, emptyList())
+  }
+
+  private fun validateChoiceAnswer(choice: PendingChoice, answer: ChoiceAnswer): String? {
+    return when (choice.type) {
+      ChoiceType.OPTION -> {
+        if (answer !is ChoiceAnswer.OptionAnswer) return "Expected OptionAnswer"
+        val allowed = choice.candidates.filterIsInstance<ChoiceCandidate.OptionCandidate>().map { it.optionId }
+        if (allowed.isNotEmpty() && answer.optionId !in allowed) return "Option not in candidates"
+        null
+      }
+
+      ChoiceType.NUMBER -> {
+        if (answer !is ChoiceAnswer.NumberAnswer) return "Expected NumberAnswer"
+        if (answer.value < choice.minimum || answer.value > choice.maximum) return "Number out of range"
+        null
+      }
+
+      ChoiceType.CARD_SELECTION -> {
+        if (answer !is ChoiceAnswer.CardSelectionAnswer) return "Expected CardSelectionAnswer"
+        val count = answer.cardIds.size
+        if (count < choice.minimum || count > choice.maximum) return "Selection count out of range"
+        val allowed = choice.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }.toSet()
+        if (allowed.isNotEmpty() && answer.cardIds.any { it !in allowed }) return "Card not in candidates"
+        null
+      }
+
+      ChoiceType.CARD_ORDER -> {
+        if (answer !is ChoiceAnswer.CardOrderAnswer) return "Expected CardOrderAnswer"
+        val allowed = choice.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }
+        if (allowed.isNotEmpty() && answer.cardIds.toSet() != allowed.toSet()) return "Invalid card order"
+        null
+      }
+
+      ChoiceType.BOOLEAN -> {
+        if (answer !is ChoiceAnswer.BooleanAnswer) return "Expected BooleanAnswer"
+        null
+      }
+    }
+  }
+
+  private fun processSubmitChoice(state: GameState, command: SubmitChoiceCommand): GameTransition {
+    val choice = state.pendingChoices.firstOrNull { it.id == command.choiceId } ?: return emptyTransition()
+    var seq = state.lastEventSequence
+    val events = mutableListOf<GameEvent>()
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CHOICE_SUBMITTED,
+      sourceCardId = null,
+      payload = GameEventPayload.ChoiceSubmittedPayload(command.playerId, command.choiceId, command.answer),
+      visibility = choice.visibility,
+    )
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.PENDING_CHOICE_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.PendingChoiceChangedPayload(command.choiceId, null),
+      visibility = EventVisibility.INTERNAL,
+    )
+
+    return GameTransition(
+      events = events,
+      programsToRun = emptyList(),
+      choiceToResume = PlayerChoice(command.choiceId, command.playerId, command.answer),
+    )
+  }
+
+  private fun validateMulligan(state: GameState, command: ResolveMulliganCommand): ValidationResult {
+    val setup = state.setup ?: return invalid("NOT_IN_SETUP", "Game is not in setup")
+    if (setup.step != GameSetupStep.MULLIGAN) return invalid("NOT_MULLIGAN_STEP", "Not in Mulligan step")
+    if (command.playerId !in setup.pendingMulliganPlayers) {
+      return invalid("NOT_PENDING", "Player is not awaiting mulligan")
+    }
+    val player = state.players[command.playerId] ?: return invalid("UNKNOWN_PLAYER", "Player not found")
+    if (player.hand.cards.size != 5) {
+      return invalid("INVALID_HAND", "Mulligan requires exactly 5 cards in hand")
+    }
+    return ValidationResult(true, emptyList())
+  }
+
+  private fun processMulligan(state: GameState, command: ResolveMulliganCommand): GameTransition {
+    val player = state.players[command.playerId] ?: return emptyTransition()
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    var randomState = state.randomState
+    val returned = if (command.redraw) player.hand.cards.toList() else emptyList()
+
+    if (command.redraw) {
+      for (cardId in returned) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = cardId,
+            fromPlayerId = command.playerId,
+            fromZone = ZoneType.HAND,
+            toPlayerId = command.playerId,
+            toZone = ZoneType.DECK,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(command.playerId),
+        )
+      }
+
+      val deckAfter = player.deck.cards + returned
+      val (shuffled, randomAfter) = RandomSupport.fisherYates(deckAfter.toMutableList(), randomState)
+      randomState = randomAfter
+
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DECK_SHUFFLED,
+        sourceCardId = null,
+        payload = GameEventPayload.DeckShuffledPayload(
+          playerId = command.playerId,
+          zone = ZoneType.DECK,
+          resultingOrder = shuffled,
+          randomStateAfter = randomState,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+
+      val drawn = shuffled.take(minOf(5, shuffled.size))
+      for (cardId in drawn) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = cardId,
+            fromPlayerId = command.playerId,
+            fromZone = ZoneType.DECK,
+            toPlayerId = command.playerId,
+            toZone = ZoneType.HAND,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(command.playerId),
+        )
+      }
+      if (drawn.isNotEmpty()) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARDS_DRAWN,
+          sourceCardId = null,
+          payload = GameEventPayload.CardsDrawnPayload(command.playerId, drawn),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(command.playerId),
+        )
+      }
+    }
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.MULLIGAN_RESOLVED,
+      sourceCardId = null,
+      payload = GameEventPayload.MulliganResolvedPayload(
+        playerId = command.playerId,
+        redrawn = command.redraw,
+        returnedCardIds = returned,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    return GameTransition(events = events, programsToRun = emptyList())
+  }
+
+  private fun processConcede(state: GameState, command: ConcedeCommand): GameTransition {
+    val opponent = state.playerOrder.firstOrNull { it != command.playerId } ?: return emptyTransition()
+    var seq = state.lastEventSequence
+    val events = mutableListOf<GameEvent>()
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.PLAYER_LOST,
+      sourceCardId = null,
+      payload = GameEventPayload.PlayerLostPayload(command.playerId, GameEndReason.CONCESSION),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.PLAYER_WON,
+      sourceCardId = null,
+      payload = GameEventPayload.PlayerWonPayload(opponent, GameEndReason.CONCESSION),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    return GameTransition(events = events, programsToRun = emptyList())
+  }
+
+  private fun evaluateInt(
+    expr: ValueExpr,
+    state: GameState,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): Int? {
+    return when (val r = evaluateValue(expr, state, context, variables)) {
+      is EvaluationResult.Failed -> null
+      is EvaluationResult.Success -> (r.value as? StoredValue.IntegerValue)?.value
+    }
+  }
+
+  private fun executeSelectCards(
+    state: GameState,
+    instruction: SelectCards,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val candidates = when (val r = selectCards(instruction.selector, state, context, variables)) {
+      is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
+      is EvaluationResult.Success -> r.value
+    }
+    val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: 0
+    val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: candidates.size
+    val choice = PendingChoice(
+      id = ChoiceId("${state.id.value}:sel:${state.lastEventSequence + 1}"),
+      playerId = instruction.playerId,
+      frameId = ExecutionId("pending"),
+      type = ChoiceType.CARD_SELECTION,
+      minimum = minVal.coerceAtLeast(0),
+      maximum = maxVal.coerceAtLeast(minVal),
+      candidates = candidates.map { ChoiceCandidate.CardCandidate(it) },
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Suspended(choice)
+  }
+
+  private fun executeCountCards(
+    state: GameState,
+    instruction: CountCards,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val candidates = when (val r = selectCards(instruction.selector, state, context, variables)) {
+      is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
+      is EvaluationResult.Success -> r.value
+    }
+    return InstructionExecutionResult.Completed(
+      StoredValue.IntegerValue(candidates.size),
+      emptyList(),
+    )
+  }
+
+  private fun executeLookAtTop(
+    state: GameState,
+    instruction: LookAtTop,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val amount = evaluateInt(instruction.amount, state, context, variables) ?: 0
+    val player = state.players[instruction.playerId] ?: return failExec("UNKNOWN_PLAYER", "Player not found", 0)
+    val cards = when (instruction.zone) {
+      ZoneType.DECK -> player.deck.cards.take(amount)
+      ZoneType.LIFE -> player.life.cards.take(amount)
+      ZoneType.DON_DECK -> player.donDeck.cards.take(amount)
+      else -> emptyList()
+    }
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_REVEALED,
+      sourceCardId = context.sourceCardId,
+      payload = GameEventPayload.CardRevealedPayload(
+        cards,
+        CardVisibility.PLAYERS(setOf(instruction.playerId)),
+      ),
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(cards), listOf(event))
+  }
+
+  private fun executeRevealCards(
+    state: GameState,
+    instruction: RevealCards,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val cardIds = when (val v = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> v.value
+      is StoredValue.CardValue -> listOf(v.value)
+      else -> return failExec("INVALID_SOURCE", "RevealCards requires card ids", 0)
+    }
+    if (cardIds.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+
+    val isPublic = Viewer.ALL_PLAYERS in instruction.viewers
+    val viewers = mutableSetOf<PlayerId>()
+    for (viewer in instruction.viewers) {
+      when (viewer) {
+        Viewer.ALL_PLAYERS -> Unit
+        Viewer.SOURCE_CONTROLLER -> viewers += context.controllerId
+        Viewer.OPPONENT -> state.playerOrder.firstOrNull { it != context.controllerId }?.let { viewers += it }
+        Viewer.OWNER -> cardIds.forEach { id ->
+          state.cards[id]?.let { viewers += it.ownerId }
+        }
+      }
+    }
+    val cardVisibility = if (isPublic) CardVisibility.PUBLIC else CardVisibility.PLAYERS(viewers)
+    val eventVisibility = if (isPublic) EventVisibility.PUBLIC else EventVisibility.PRIVATE_TO_PLAYERS(viewers)
+
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_REVEALED,
+      sourceCardId = context.sourceCardId,
+      payload = GameEventPayload.CardRevealedPayload(cardIds, cardVisibility),
+      visibility = eventVisibility,
+    )
+    return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  private fun executeChooseOption(
+    state: GameState,
+    instruction: ChooseOption,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val choice = PendingChoice(
+      id = ChoiceId("${state.id.value}:opt:${state.lastEventSequence + 1}"),
+      playerId = instruction.playerId,
+      frameId = ExecutionId("pending"),
+      type = ChoiceType.OPTION,
+      minimum = 1,
+      maximum = 1,
+      candidates = instruction.options.map { ChoiceCandidate.OptionCandidate(it) },
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Suspended(choice)
+  }
+
+  private fun executeChooseNumber(
+    state: GameState,
+    instruction: ChooseNumber,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: 0
+    val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: minVal
+    val choice = PendingChoice(
+      id = ChoiceId("${state.id.value}:num:${state.lastEventSequence + 1}"),
+      playerId = instruction.playerId,
+      frameId = ExecutionId("pending"),
+      type = ChoiceType.NUMBER,
+      minimum = minVal,
+      maximum = maxVal,
+      candidates = (minVal..maxVal).map { ChoiceCandidate.NumberCandidate(it) },
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Suspended(choice)
+  }
+
+  private fun executeOrderCards(
+    state: GameState,
+    instruction: OrderCards,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val cardIds = when (val v = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> v.value
+      is StoredValue.CardValue -> listOf(v.value)
+      else -> return failExec("INVALID_SOURCE", "OrderCards requires card ids", 0)
+    }
+    if (cardIds.isEmpty()) {
+      return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(emptyList()), emptyList())
+    }
+    val choice = PendingChoice(
+      id = ChoiceId("${state.id.value}:order:${state.lastEventSequence + 1}"),
+      playerId = instruction.playerId,
+      frameId = ExecutionId("pending"),
+      type = ChoiceType.CARD_ORDER,
+      minimum = cardIds.size,
+      maximum = cardIds.size,
+      candidates = cardIds.map { ChoiceCandidate.CardCandidate(it) },
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Suspended(choice)
+  }
+
+  private fun executeCheckCondition(
+    state: GameState,
+    instruction: CheckCondition,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    return when (val r = evaluateCondition(instruction.condition, state, context, variables)) {
+      is EvaluationResult.Failed -> InstructionExecutionResult.Failed(r.error)
+      is EvaluationResult.Success -> InstructionExecutionResult.Completed(
+        StoredValue.BooleanValue(r.value),
+        emptyList(),
+      )
+    }
+  }
+
+  private fun executeSetGameResult(
+    state: GameState,
+    instruction: SetGameResult,
+    context: EffectContext,
+  ): InstructionExecutionResult {
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    val result = instruction.result
+
+    if (result.reason == GameEndReason.DRAW || (result.winnerId == null && result.loserIds.isEmpty())) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.GAME_DRAWN,
+        sourceCardId = context.sourceCardId,
+        payload = GameEventPayload.GameDrawnPayload(state.players.keys, result.reason),
+        visibility = EventVisibility.PUBLIC,
+      )
+      return InstructionExecutionResult.Completed(null, events)
+    }
+
+    result.winnerId?.let { winner ->
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.PLAYER_WON,
+        sourceCardId = context.sourceCardId,
+        payload = GameEventPayload.PlayerWonPayload(winner, result.reason),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    for (loser in result.loserIds) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.PLAYER_LOST,
+        sourceCardId = context.sourceCardId,
+        payload = GameEventPayload.PlayerLostPayload(loser, result.reason),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
   }
 
   private fun emitModifiers(
@@ -1783,7 +2293,7 @@ internal class TurnController {
             faceState = FaceState.FACE_DOWN,
             visibility = CardVisibility.OWNER_ONLY,
           ),
-          visibility = EventVisibility.PUBLIC,
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
         )
         seq += 1
         events += GameEvent(
@@ -2208,6 +2718,7 @@ internal class ZoneInstructionExecutor {
     context: EffectContext,
     variables: Map<VariableId, StoredValue>,
     evaluator: RulesEngine,
+    informationManager: InformationManager,
   ): InstructionExecutionResult {
     val cardIds = when (val source = variables[instruction.source]) {
       is StoredValue.CardIdsValue -> source.value
@@ -2219,9 +2730,28 @@ internal class ZoneInstructionExecutor {
     var seq = state.lastEventSequence
     for (cardId in cardIds) {
       val located = locateCard(state, cardId) ?: continue
+      val fromZone = located.second
+      val ownerId = state.cards[cardId]?.ownerId ?: instruction.destination.playerId
+      val toZone = instruction.destination.zone
+
+      if (informationManager.needsTemporaryReveal(fromZone, toZone)) {
+        seq += 1
+        events += informationManager.revealEvent(
+          state = state,
+          cardIds = listOf(cardId),
+          cardVisibility = CardVisibility.PLAYERS(setOf(ownerId)),
+          eventVisibility = EventVisibility.PRIVATE_TO_PLAYER(ownerId),
+          sequence = seq,
+        )
+      }
+
       seq += 1
-      val orientation = defaultOrientation(instruction.destination.zone)
-      val face = defaultFace(instruction.destination.zone)
+      val visibility = informationManager.defaultVisibility(toZone, ownerId)
+      val eventVisibility = if (informationManager.isSecret(toZone)) {
+        EventVisibility.PRIVATE_TO_PLAYER(ownerId)
+      } else {
+        EventVisibility.PUBLIC
+      }
       events += GameEvent(
         id = EventId("${state.id.value}:$seq"),
         sequence = seq,
@@ -2230,20 +2760,20 @@ internal class ZoneInstructionExecutor {
         payload = GameEventPayload.CardMovedPayload(
           cardId = cardId,
           fromPlayerId = located.first,
-          fromZone = located.second,
+          fromZone = fromZone,
           toPlayerId = instruction.destination.playerId,
-          toZone = instruction.destination.zone,
+          toZone = toZone,
           destinationIndex = when (instruction.placement) {
             Placement.TOP -> 0
             Placement.BOTTOM -> null
             Placement.DEFAULT -> null
           },
           newObjectId = null,
-          orientation = orientation,
-          faceState = face,
-          visibility = if (instruction.destination.zone == ZoneType.HAND) CardVisibility.OWNER_ONLY else CardVisibility.PUBLIC,
+          orientation = defaultOrientation(toZone),
+          faceState = defaultFace(toZone),
+          visibility = visibility,
         ),
-        visibility = EventVisibility.PUBLIC,
+        visibility = eventVisibility,
       )
     }
     return InstructionExecutionResult.Completed(null, events)
@@ -3455,11 +3985,18 @@ internal class DamageProcessor(
     val amount = (amountResult as EvaluationResult.Success).value.let {
       (it as? StoredValue.IntegerValue)?.value ?: return InstructionExecutionResult.Completed(null, emptyList())
     }.coerceAtLeast(0)
+    if (amount == 0) return InstructionExecutionResult.Completed(null, emptyList())
+
+    val player = state.players[instruction.playerId] ?: return InstructionExecutionResult.Completed(null, emptyList())
 
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
+    val remainingLife = player.life.cards.toMutableList()
+    var defeated = false
 
     for (i in 0 until amount) {
+      if (defeated) break
+
       seq += 1
       events += GameEvent(
         id = EventId("${state.id.value}:$seq"),
@@ -3467,10 +4004,56 @@ internal class DamageProcessor(
         type = GameEventType.DAMAGE_PROCESSED,
         sourceCardId = context.sourceCardId,
         payload = GameEventPayload.DamageProcessedPayload(
-          instruction.playerId, 1, context.sourceCardId, instruction.effectId
+          instruction.playerId, 1, context.sourceCardId, instruction.effectId,
         ),
         visibility = EventVisibility.PUBLIC,
       )
+
+      if (remainingLife.isNotEmpty()) {
+        val lifeCardId = remainingLife.removeAt(0)
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = lifeCardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = lifeCardId,
+            fromPlayerId = instruction.playerId,
+            fromZone = ZoneType.LIFE,
+            toPlayerId = instruction.playerId,
+            toZone = ZoneType.HAND,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.LIFE_CHANGED,
+          sourceCardId = null,
+          payload = GameEventPayload.LifeChangedPayload(
+            instruction.playerId, emptyList(), listOf(lifeCardId), ZoneType.HAND,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+      } else {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.PLAYER_LOST,
+          sourceCardId = context.sourceCardId,
+          payload = GameEventPayload.PlayerLostPayload(instruction.playerId, GameEndReason.LIFE_DEFEAT),
+          visibility = EventVisibility.PUBLIC,
+        )
+        defeated = true
+      }
     }
 
     return InstructionExecutionResult.Completed(null, events)
@@ -4141,6 +4724,159 @@ internal class EffectScheduler(
   }
 }
 
-internal class RuleProcessor
-internal class InformationManager
-internal class LoopProcessor
+internal class RuleProcessor {
+
+  fun processRules(state: GameState): GameTransition {
+    if (state.status == GameStatus.FINISHED) return GameTransition(emptyList(), emptyList())
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    val defeated = mutableSetOf<PlayerId>()
+    val reasons = mutableMapOf<PlayerId, GameEndReason>()
+
+    for (playerId in state.playerOrder) {
+      val player = state.players[playerId] ?: continue
+      if (player.deck.cards.isEmpty()) {
+        defeated += playerId
+        reasons[playerId] = GameEndReason.DECK_OUT
+      }
+    }
+
+    if (defeated.isEmpty()) return GameTransition(emptyList(), emptyList())
+
+    if (defeated.size == state.players.size) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.GAME_DRAWN,
+        sourceCardId = null,
+        payload = GameEventPayload.GameDrawnPayload(defeated, GameEndReason.DRAW),
+        visibility = EventVisibility.PUBLIC,
+      )
+    } else {
+      for (playerId in defeated.sortedBy { it.value }) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.PLAYER_LOST,
+          sourceCardId = null,
+          payload = GameEventPayload.PlayerLostPayload(playerId, reasons.getValue(playerId)),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
+    }
+    return GameTransition(events, emptyList())
+  }
+}
+
+internal class InformationManager {
+
+  fun isSecret(zone: ZoneType): Boolean = when (zone) {
+    ZoneType.DECK, ZoneType.DON_DECK, ZoneType.HAND, ZoneType.LIFE -> true
+    else -> false
+  }
+
+  fun defaultVisibility(zone: ZoneType, ownerId: PlayerId): CardVisibility = when (zone) {
+    ZoneType.DECK, ZoneType.DON_DECK, ZoneType.HAND, ZoneType.LIFE -> CardVisibility.OWNER_ONLY
+    ZoneType.ATTACHED_DON -> CardVisibility.OWNER_ONLY
+    else -> CardVisibility.PUBLIC
+  }
+
+  fun needsTemporaryReveal(fromZone: ZoneType, toZone: ZoneType): Boolean {
+    return isSecret(fromZone) && isSecret(toZone)
+  }
+
+  fun revealEvent(
+    state: GameState,
+    cardIds: List<CardInstanceId>,
+    cardVisibility: CardVisibility,
+    eventVisibility: EventVisibility,
+    sequence: Long,
+  ): GameEvent {
+    return GameEvent(
+      id = EventId("${state.id.value}:$sequence"),
+      sequence = sequence,
+      type = GameEventType.CARD_REVEALED,
+      sourceCardId = null,
+      payload = GameEventPayload.CardRevealedPayload(cardIds, cardVisibility),
+      visibility = eventVisibility,
+    )
+  }
+}
+
+internal class LoopProcessor {
+
+  data class LoopResolution(
+    val events: List<GameEvent>,
+    val repetitions: Int?,
+    val draw: Boolean,
+  )
+
+  fun detectRepeatedState(
+    current: GameState,
+    history: List<GameState>,
+    window: Int = 3,
+  ): Boolean {
+    if (history.size < window) return false
+    val signature = stateSignature(current)
+    return history.takeLast(window).all { stateSignature(it) == signature }
+  }
+
+  fun resolve(
+    state: GameState,
+    interruptibleBy: Set<PlayerId>,
+    repetitions: Map<PlayerId, Int>,
+  ): LoopResolution {
+    if (interruptibleBy.isEmpty()) {
+      return LoopResolution(
+        events = listOf(drawEvent(state)),
+        repetitions = null,
+        draw = true,
+      )
+    }
+    if (interruptibleBy.size == 1) {
+      val player = interruptibleBy.first()
+      return LoopResolution(
+        events = emptyList(),
+        repetitions = repetitions[player] ?: 0,
+        draw = false,
+      )
+    }
+    val turnPlayer = state.turn?.playerId ?: state.playerOrder.first()
+    val nonTurnPlayer = state.playerOrder.firstOrNull { it != turnPlayer } ?: turnPlayer
+    val turnReps = repetitions[turnPlayer] ?: 0
+    val nonTurnReps = repetitions[nonTurnPlayer] ?: 0
+    return LoopResolution(
+      events = emptyList(),
+      repetitions = minOf(turnReps, nonTurnReps),
+      draw = false,
+    )
+  }
+
+  private fun stateSignature(state: GameState): String = buildString {
+    append(state.turn?.number ?: 0).append('|')
+    append(state.turn?.phase?.name ?: "").append('|')
+    for (playerId in state.playerOrder) {
+      val player = state.players[playerId] ?: continue
+      append(player.deck.cards.size).append(',')
+      append(player.hand.cards.size).append(',')
+      append(player.life.cards.size).append(',')
+      append(player.cost.cards.size).append(',')
+      append(player.characters.cards.size).append(',')
+    }
+  }
+
+  private fun drawEvent(state: GameState): GameEvent {
+    val seq = state.lastEventSequence + 1
+    return GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.GAME_DRAWN,
+      sourceCardId = null,
+      payload = GameEventPayload.GameDrawnPayload(state.players.keys, GameEndReason.DRAW),
+      visibility = EventVisibility.PUBLIC,
+    )
+  }
+}
