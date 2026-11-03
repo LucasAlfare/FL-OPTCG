@@ -391,6 +391,16 @@ sealed class GameEventPayload {
     val playerIds: Set<PlayerId>,
     val reason: GameEndReason,
   ) : GameEventPayload()
+
+  data class ProgramFrameChangedPayload(
+    val executionId: ExecutionId,
+    val frame: ProgramFrame?,
+  ) : GameEventPayload()
+
+  data class PendingChoiceChangedPayload(
+    val choiceId: ChoiceId,
+    val choice: PendingChoice?,
+  ) : GameEventPayload()
 }
 
 data class CardDefinition(
@@ -503,6 +513,8 @@ data class GameState(
   val turn: TurnState?,
   val battle: BattleState?,
   val activeEffects: List<ActiveEffect>,
+  val activePrograms: List<ProgramFrame> = emptyList(),
+  val pendingChoices: List<PendingChoice> = emptyList(),
   val randomState: RandomState,
   val lastEventSequence: Long,
   val result: GameResult?,
