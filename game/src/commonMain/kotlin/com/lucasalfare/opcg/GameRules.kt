@@ -28,7 +28,7 @@ class RulesEngine(
 
   private val turnController = TurnController()
   private val mainPhaseController = MainPhaseController()
-  private val battleResolver = BattleResolver()
+  private val battleResolver = BattleResolver(cardCatalog)
   private val damageProcessor = DamageProcessor()
   private val costProcessor = CostProcessor()
   private val effectScheduler = EffectScheduler(cardCatalog)
@@ -48,6 +48,13 @@ class RulesEngine(
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
       is EndMainPhaseCommand -> mainPhaseController.validateEndMain(state, command)
       is ActivateAbilityCommand -> effectScheduler.validateActivate(state, command, this)
+      is DeclareAttackCommand -> battleResolver.validateDeclareAttack(state, command, continuousEffectProcessor)
+      is ActivateBlockerCommand -> battleResolver.validateActivateBlocker(state, command, continuousEffectProcessor)
+      is UseCharacterCounterCommand -> battleResolver.validateCharacterCounter(
+        state, command, continuousEffectProcessor
+      )
+
+      is UseEventCounterCommand -> battleResolver.validateEventCounter(state, command, continuousEffectProcessor)
       else -> ValidationResult(true, emptyList())
     }
   }
@@ -65,8 +72,22 @@ class RulesEngine(
       is GiveDonCommand -> mainPhaseController.processGiveDon(state, command, continuousEffectProcessor)
       is EndMainPhaseCommand -> turnController.endMainPhase(state, command.playerId)
       is ActivateAbilityCommand -> effectScheduler.processActivate(state, command, this)
+      is DeclareAttackCommand -> battleResolver.processDeclareAttack(state, command, continuousEffectProcessor, this)
+      is ActivateBlockerCommand -> battleResolver.processActivateBlocker(
+        state, command, continuousEffectProcessor, this
+      )
+
+      is UseCharacterCounterCommand -> battleResolver.processCharacterCounter(state, command, continuousEffectProcessor)
+      is UseEventCounterCommand -> battleResolver.processEventCounter(
+        state, command, continuousEffectProcessor, costProcessor, this
+      )
+
       else -> GameTransition(events = emptyList(), programsToRun = emptyList())
     }
+  }
+
+  fun advanceBattleStep(state: GameState): GameTransition {
+    return battleResolver.advanceStep(state, continuousEffectProcessor, this)
   }
 
   fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
@@ -2605,7 +2626,579 @@ internal class DonInstructionExecutor {
   private fun fail(code: String, message: String) = InstructionExecutionResult.Failed(VmError(code, message, 0))
 }
 
-internal class BattleResolver
+internal class BattleResolver(
+  private val cardCatalog: CardCatalog,
+) {
+
+  fun validateDeclareAttack(
+    state: GameState,
+    command: DeclareAttackCommand,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val violations = mutableListOf<RuleViolation>()
+    val turn = state.turn
+    if (turn == null || turn.phase != GamePhase.MAIN || turn.playerId != command.playerId) {
+      violations += RuleViolation("NOT_MAIN_PHASE", "Attack only during your Main Phase")
+    }
+    if (state.battle != null) {
+      violations += RuleViolation("BATTLE_IN_PROGRESS", "A battle is already in progress")
+    }
+    if (turn != null && turn.number == 1 && command.playerId == state.firstPlayerId) {
+      violations += RuleViolation("FIRST_TURN", "First player cannot attack on the first turn")
+    }
+
+    val attacker = state.cards[command.attackerId]
+    if (attacker == null) {
+      return ValidationResult(false, violations + RuleViolation("UNKNOWN_ATTACKER", "Attacker not found"))
+    }
+    val attackerController = continuous.effectiveController(state, command.attackerId) ?: attacker.controllerId
+    if (attackerController != command.playerId) {
+      violations += RuleViolation("NOT_CONTROLLER", "Attacker is not controlled by the player")
+    }
+    if (attacker.orientation != CardOrientation.ACTIVE) {
+      violations += RuleViolation("ATTACKER_RESTED", "Attacker must be active")
+    }
+
+    val player = state.players[command.playerId]
+    val inLeader = player != null && command.attackerId in player.leader.cards
+    val inCharacter = player != null && command.attackerId in player.characters.cards
+    if (!inLeader && !inCharacter) {
+      violations += RuleViolation("INVALID_ATTACKER_ZONE", "Attacker must be Leader or Character")
+    }
+
+    val def = cardCatalog.get(attacker.definitionId)
+    val keywords = continuous.effectiveCharacteristics(state, command.attackerId)?.keywords ?: def?.keywords.orEmpty()
+    if (inCharacter && KeywordEffect.RUSH !in keywords && KeywordEffect.RUSH_CHARACTER !in keywords) {
+      // Newly played characters without Rush cannot attack; without explicit "played this turn" flag,
+      // only enforce when the card was activated this turn via ability usage is unavailable.
+      // Keep legal if active; GameEngine may refine with play-turn tracking.
+    }
+
+    when (val target = command.targetId) {
+      is BattleTarget.PlayerTarget -> {
+        violations += RuleViolation("INVALID_TARGET", "Direct player target is not used; target Leader or Character")
+      }
+
+      is BattleTarget.CardTarget -> {
+        val targetCard = state.cards[target.cardInstanceId]
+        if (targetCard == null) {
+          violations += RuleViolation("UNKNOWN_TARGET", "Target card not found")
+        } else {
+          val targetController = continuous.effectiveController(state, target.cardInstanceId) ?: targetCard.controllerId
+          if (targetController == command.playerId) {
+            violations += RuleViolation("FRIENDLY_TARGET", "Cannot attack own cards")
+          }
+          val opponent = state.players[targetController]
+          val isOppLeader = opponent != null && target.cardInstanceId in opponent.leader.cards
+          val isOppCharacter = opponent != null && target.cardInstanceId in opponent.characters.cards
+          if (!isOppLeader && !isOppCharacter) {
+            violations += RuleViolation("INVALID_TARGET_ZONE", "Target must be opponent Leader or Character")
+          }
+          if (isOppCharacter && targetCard.orientation != CardOrientation.RESTED) {
+            violations += RuleViolation("TARGET_NOT_RESTED", "Character targets must be rested")
+          }
+        }
+      }
+    }
+
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  fun processDeclareAttack(
+    state: GameState,
+    command: DeclareAttackCommand,
+    continuous: ContinuousEffectProcessor,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_STATE_CHANGED,
+      sourceCardId = command.attackerId,
+      payload = GameEventPayload.CardStateChangedPayload(
+        command.attackerId,
+        CardOrientation.RESTED,
+        state.cards[command.attackerId]?.faceState ?: FaceState.FACE_UP,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    seq += 1
+    val declared = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.ATTACK_DECLARED,
+      sourceCardId = command.attackerId,
+      payload = GameEventPayload.AttackDeclaredPayload(command.attackerId, command.targetId),
+      visibility = EventVisibility.PUBLIC,
+    )
+    events += declared
+
+    // BattleState is applied by reducer from ATTACK_DECLARED; processEvents schedules When Attacking / On Opponent Attack
+    val auto = evaluator.processEvents(
+      state.copy(
+        battle = BattleState(
+          attackerId = command.attackerId,
+          originalTarget = command.targetId,
+          currentTarget = command.targetId,
+          step = BattleStep.ATTACK,
+          blockerUsed = false,
+          counterPower = 0,
+        ),
+      ),
+      listOf(declared),
+    )
+    return GameTransition(events + auto.events, auto.programsToRun)
+  }
+
+  fun validateActivateBlocker(
+    state: GameState,
+    command: ActivateBlockerCommand,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val violations = mutableListOf<RuleViolation>()
+    val battle = state.battle
+    if (battle == null || battle.step != BattleStep.BLOCK) {
+      violations += RuleViolation("NOT_BLOCK_STEP", "Blocker only during Block step")
+    }
+    if (battle?.blockerUsed == true) {
+      violations += RuleViolation("BLOCKER_USED", "A Blocker was already used this battle")
+    }
+    val blocker = state.cards[command.blockerId]
+    if (blocker == null) {
+      return ValidationResult(false, violations + RuleViolation("UNKNOWN_BLOCKER", "Blocker not found"))
+    }
+    val controller = continuous.effectiveController(state, command.blockerId) ?: blocker.controllerId
+    if (controller != command.playerId) {
+      violations += RuleViolation("NOT_CONTROLLER", "Player does not control the Blocker")
+    }
+    if (blocker.orientation != CardOrientation.ACTIVE) {
+      violations += RuleViolation("BLOCKER_RESTED", "Blocker must be active")
+    }
+    val player = state.players[command.playerId]
+    if (player == null || command.blockerId !in player.characters.cards) {
+      violations += RuleViolation("INVALID_BLOCKER_ZONE", "Blocker must be a Character")
+    }
+    val keywords = continuous.effectiveCharacteristics(state, command.blockerId)?.keywords.orEmpty()
+    if (KeywordEffect.BLOCKER !in keywords) {
+      violations += RuleViolation("NO_BLOCKER_KEYWORD", "Character does not have Blocker")
+    }
+    if (battle != null) {
+      val attackerKeywords = continuous.effectiveCharacteristics(state, battle.attackerId)?.keywords.orEmpty()
+      if (KeywordEffect.UNBLOCKABLE in attackerKeywords) {
+        violations += RuleViolation("UNBLOCKABLE", "Attacker is Unblockable")
+      }
+      val attackerController = state.cards[battle.attackerId]?.let {
+        continuous.effectiveController(state, battle.attackerId) ?: it.controllerId
+      }
+      if (attackerController == command.playerId) {
+        violations += RuleViolation("ATTACKING_PLAYER", "Attacking player cannot block")
+      }
+    }
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  fun processActivateBlocker(
+    state: GameState,
+    command: ActivateBlockerCommand,
+    continuous: ContinuousEffectProcessor,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val battle = state.battle ?: return GameTransition(emptyList(), emptyList())
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_STATE_CHANGED,
+      sourceCardId = command.blockerId,
+      payload = GameEventPayload.CardStateChangedPayload(
+        command.blockerId,
+        CardOrientation.RESTED,
+        state.cards[command.blockerId]?.faceState ?: FaceState.FACE_UP,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    val newTarget = BattleTarget.CardTarget(command.blockerId)
+    seq += 1
+    val blocked = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.BLOCK_ACTIVATED,
+      sourceCardId = command.blockerId,
+      payload = GameEventPayload.BlockActivatedPayload(
+        blockerId = command.blockerId,
+        previousTarget = battle.currentTarget,
+        newTarget = newTarget,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    events += blocked
+
+    val auto = evaluator.processEvents(state, listOf(blocked))
+    return GameTransition(events + auto.events, auto.programsToRun)
+  }
+
+  fun validateCharacterCounter(
+    state: GameState,
+    command: UseCharacterCounterCommand,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val violations = mutableListOf<RuleViolation>()
+    val battle = state.battle
+    if (battle == null || battle.step != BattleStep.COUNTER) {
+      violations += RuleViolation("NOT_COUNTER_STEP", "Counter only during Counter step")
+    }
+    val card = state.cards[command.cardId]
+    if (card == null) {
+      return ValidationResult(false, violations + RuleViolation("UNKNOWN_CARD", "Counter card not found"))
+    }
+    if (card.ownerId != command.playerId) {
+      violations += RuleViolation("NOT_OWNER", "Player does not own the card")
+    }
+    val player = state.players[command.playerId]
+    if (player == null || command.cardId !in player.hand.cards) {
+      violations += RuleViolation("NOT_IN_HAND", "Counter card must be in hand")
+    }
+    val def = cardCatalog.get(card.definitionId)
+    if (def == null || def.category != CardCategory.CHARACTER) {
+      violations += RuleViolation("NOT_CHARACTER", "Character Counter requires a Character card")
+    }
+    val counterValue = continuous.effectiveCharacteristics(state, command.cardId)?.counter ?: def?.counter
+    if (counterValue == null || counterValue <= 0) {
+      violations += RuleViolation("NO_COUNTER", "Card has no Counter value")
+    }
+    if (battle != null) {
+      val legalTargets = counterTargets(state, battle)
+      if (command.targetId !in legalTargets) {
+        violations += RuleViolation("INVALID_COUNTER_TARGET", "Counter target is not legal")
+      }
+      val attackerController = state.cards[battle.attackerId]?.let {
+        continuous.effectiveController(state, battle.attackerId) ?: it.controllerId
+      }
+      if (attackerController == command.playerId) {
+        violations += RuleViolation("ATTACKING_PLAYER", "Attacking player cannot use Counter")
+      }
+    }
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  fun processCharacterCounter(
+    state: GameState,
+    command: UseCharacterCounterCommand,
+    continuous: ContinuousEffectProcessor,
+  ): GameTransition {
+    state.battle ?: return GameTransition(emptyList(), emptyList())
+    val def =
+      cardCatalog.get(state.cards[command.cardId]?.definitionId ?: return GameTransition(emptyList(), emptyList()))
+    val power = continuous.effectiveCharacteristics(state, command.cardId)?.counter ?: def?.counter ?: 0
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_MOVED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.CardMovedPayload(
+        cardId = command.cardId,
+        fromPlayerId = command.playerId,
+        fromZone = ZoneType.HAND,
+        toPlayerId = command.playerId,
+        toZone = ZoneType.TRASH,
+        destinationIndex = null,
+        newObjectId = null,
+        orientation = CardOrientation.NOT_APPLICABLE,
+        faceState = FaceState.FACE_UP,
+        visibility = CardVisibility.PUBLIC,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.COUNTER_ACTIVATED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.CounterActivatedPayload(
+        playerId = command.playerId,
+        cardId = command.cardId,
+        targetCardId = command.targetId,
+        powerAdded = power,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return GameTransition(events, emptyList())
+  }
+
+  fun validateEventCounter(
+    state: GameState,
+    command: UseEventCounterCommand,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val violations = mutableListOf<RuleViolation>()
+    val battle = state.battle
+    if (battle == null || battle.step != BattleStep.COUNTER) {
+      violations += RuleViolation("NOT_COUNTER_STEP", "Event Counter only during Counter step")
+    }
+    val card = state.cards[command.cardId]
+    if (card == null) {
+      return ValidationResult(false, violations + RuleViolation("UNKNOWN_CARD", "Event not found"))
+    }
+    if (card.ownerId != command.playerId) {
+      violations += RuleViolation("NOT_OWNER", "Player does not own the Event")
+    }
+    val player = state.players[command.playerId]
+    if (player == null || command.cardId !in player.hand.cards) {
+      violations += RuleViolation("NOT_IN_HAND", "Event must be in hand")
+    }
+    val def = cardCatalog.get(card.definitionId)
+    if (def == null || def.category != CardCategory.EVENT) {
+      violations += RuleViolation("NOT_EVENT", "Card is not an Event")
+    }
+    val counterAbility = def?.abilities?.filterIsInstance<ActivatedAbilityDefinition>()
+      ?.firstOrNull { it.timing == ActivationTiming.COUNTER_STEP }
+    if (counterAbility == null) {
+      violations += RuleViolation("NO_COUNTER_ABILITY", "Event has no Counter Step ability")
+    }
+    if (battle != null) {
+      val attackerController = state.cards[battle.attackerId]?.let {
+        continuous.effectiveController(state, battle.attackerId) ?: it.controllerId
+      }
+      if (attackerController == command.playerId) {
+        violations += RuleViolation("ATTACKING_PLAYER", "Attacking player cannot use Event Counter")
+      }
+    }
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  fun processEventCounter(
+    state: GameState,
+    command: UseEventCounterCommand,
+    continuous: ContinuousEffectProcessor,
+    costProcessor: CostProcessor,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val card = state.cards[command.cardId] ?: return GameTransition(emptyList(), emptyList())
+    val def = cardCatalog.get(card.definitionId) ?: return GameTransition(emptyList(), emptyList())
+    val ability = def.abilities.filterIsInstance<ActivatedAbilityDefinition>()
+      .firstOrNull { it.timing == ActivationTiming.COUNTER_STEP } ?: return GameTransition(emptyList(), emptyList())
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    val programs = mutableListOf<ProgramRequest>()
+
+    // Pay declarative cost of the Counter ability (not the Event's play cost)
+    when (val cost = ability.cost) {
+      is Cost.NoCost -> Unit
+      is Cost.RestDonCost -> {
+        val amount = when (val r = evaluator.evaluateValue(
+          cost.amount,
+          state,
+          EffectContext(state.id, command.playerId, command.cardId, ability.id, null),
+          emptyMap(),
+        )) {
+          is EvaluationResult.Success -> (r.value as? StoredValue.IntegerValue)?.value ?: 0
+          is EvaluationResult.Failed -> 0
+        }
+        val dons = costProcessor.selectActiveDon(state, command.playerId, amount)
+        if (dons.size < amount) return GameTransition(emptyList(), emptyList())
+        if (dons.isNotEmpty()) {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.DON_RESTED,
+            sourceCardId = null,
+            payload = GameEventPayload.DonRestedPayload(command.playerId, dons),
+            visibility = EventVisibility.PUBLIC,
+          )
+        }
+      }
+
+      is Cost.RestSourceCost -> {
+        // N/A for hand events
+      }
+
+      else -> Unit
+    }
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_REVEALED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.CardRevealedPayload(listOf(command.cardId), CardVisibility.PUBLIC),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_MOVED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.CardMovedPayload(
+        cardId = command.cardId,
+        fromPlayerId = command.playerId,
+        fromZone = ZoneType.HAND,
+        toPlayerId = command.playerId,
+        toZone = ZoneType.TRASH,
+        destinationIndex = null,
+        newObjectId = null,
+        orientation = CardOrientation.NOT_APPLICABLE,
+        faceState = FaceState.FACE_UP,
+        visibility = CardVisibility.PUBLIC,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARD_ACTIVATED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.CardActivatedPayload(command.cardId, command.playerId),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    seq += 1
+    val counterEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.COUNTER_ACTIVATED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.CounterActivatedPayload(
+        playerId = command.playerId,
+        cardId = command.cardId,
+        targetCardId = state.battle?.attackerId ?: command.cardId,
+        powerAdded = 0,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    events += counterEvent
+
+    seq += 1
+    val activation = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.EFFECT_ACTIVATED,
+      sourceCardId = command.cardId,
+      payload = GameEventPayload.EffectActivatedPayload(
+        effectId = EffectId("${state.id.value}:counter:$seq"),
+        sourceCardId = command.cardId,
+        abilityId = ability.id,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    events += activation
+    programs += ProgramRequest(
+      executionId = ExecutionId(activation.id.value),
+      program = ability.program,
+      context = EffectContext(
+        gameId = state.id,
+        controllerId = command.playerId,
+        sourceCardId = command.cardId,
+        abilityId = ability.id,
+        triggeringEvent = counterEvent,
+      ),
+    )
+
+    return GameTransition(events, programs)
+  }
+
+  fun advanceStep(
+    state: GameState,
+    continuous: ContinuousEffectProcessor,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val battle = state.battle ?: return GameTransition(emptyList(), emptyList())
+    if (!participantsPresent(state, battle)) {
+      return endBattle(state, battle, BattleOutcome.INTERRUPTED)
+    }
+    return when (battle.step) {
+      BattleStep.ATTACK -> moveToStep(state, BattleStep.BLOCK)
+      BattleStep.BLOCK -> moveToStep(state, BattleStep.COUNTER)
+      BattleStep.COUNTER -> moveToStep(state, BattleStep.DAMAGE)
+      BattleStep.DAMAGE -> {
+        // Damage resolution is Etapa 25; close battle window shell here if already past responses
+        endBattle(state, battle, BattleOutcome.NO_DAMAGE)
+      }
+
+      BattleStep.END -> endBattle(state, battle, BattleOutcome.NO_DAMAGE)
+    }
+  }
+
+  fun checkInterrupted(state: GameState): GameTransition {
+    val battle = state.battle ?: return GameTransition(emptyList(), emptyList())
+    if (!participantsPresent(state, battle)) {
+      return endBattle(state, battle, BattleOutcome.INTERRUPTED)
+    }
+    return GameTransition(emptyList(), emptyList())
+  }
+
+  private fun participantsPresent(state: GameState, battle: BattleState): Boolean {
+    if (state.cards[battle.attackerId] == null) return false
+    if (!inLeaderOrCharacter(state, battle.attackerId)) return false
+    return when (val target = battle.currentTarget) {
+      is BattleTarget.CardTarget -> {
+        state.cards[target.cardInstanceId] != null && inLeaderOrCharacter(state, target.cardInstanceId)
+      }
+
+      is BattleTarget.PlayerTarget -> state.players.containsKey(target.playerId)
+    }
+  }
+
+  private fun inLeaderOrCharacter(state: GameState, cardId: CardInstanceId): Boolean {
+    for (player in state.players.values) {
+      if (cardId in player.leader.cards || cardId in player.characters.cards) return true
+    }
+    return false
+  }
+
+  private fun counterTargets(state: GameState, battle: BattleState): Set<CardInstanceId> {
+    val targets = mutableSetOf(battle.attackerId)
+    when (val t = battle.currentTarget) {
+      is BattleTarget.CardTarget -> targets += t.cardInstanceId
+      is BattleTarget.PlayerTarget -> Unit
+    }
+    return targets
+  }
+
+  private fun moveToStep(state: GameState, step: BattleStep): GameTransition {
+    // Step transitions are applied by reducer; emit no dedicated event type beyond battle flow.
+    // Returning empty keeps determinism; GameEngine advances BattleState.step via internal apply.
+    return GameTransition(emptyList(), emptyList())
+  }
+
+  private fun endBattle(state: GameState, battle: BattleState, outcome: BattleOutcome): GameTransition {
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.BATTLE_ENDED,
+      sourceCardId = battle.attackerId,
+      payload = GameEventPayload.BattleEndedPayload(
+        attackerId = battle.attackerId,
+        finalTarget = battle.currentTarget,
+        outcome = outcome,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return GameTransition(listOf(event), emptyList())
+  }
+}
 
 internal class DamageProcessor
 
