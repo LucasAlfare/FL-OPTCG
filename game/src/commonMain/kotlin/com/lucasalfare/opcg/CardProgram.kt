@@ -150,6 +150,11 @@ sealed class Modifier {
   data class ReplacementModifier(
     val definition: ReplacementDefinition,
   ) : Modifier()
+
+  data class AbilityModifier(
+    val ability: AbilityDefinition,
+    val add: Boolean,
+  ) : Modifier()
 }
 
 data class ActiveEffect(
@@ -172,3 +177,35 @@ data class ReplacementDefinition(
   val priority: Int,
   val duration: Duration,
 )
+
+sealed interface AbilityDefinition {
+  val id: AbilityId
+}
+
+data class AutoAbilityDefinition(
+  override val id: AbilityId,
+  val trigger: GameEventPattern,
+  val condition: Condition?,
+  val program: Program,
+  val usageLimit: UsageLimit,
+) : AbilityDefinition
+
+data class ActivatedAbilityDefinition(
+  override val id: AbilityId,
+  val timing: ActivationTiming,
+  val cost: Cost,
+  val condition: Condition?,
+  val program: Program,
+  val usageLimit: UsageLimit,
+) : AbilityDefinition
+
+data class PermanentAbilityDefinition(
+  override val id: AbilityId,
+  val condition: Condition?,
+  val modifier: Modifier,
+) : AbilityDefinition
+
+data class ReplacementAbilityDefinition(
+  override val id: AbilityId,
+  val replacement: ReplacementDefinition,
+) : AbilityDefinition

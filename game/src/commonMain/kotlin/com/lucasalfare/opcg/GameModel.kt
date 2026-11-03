@@ -164,3 +164,229 @@ data class GameEventPattern(
   val targetPlayer: PlayerRelation? = null,
   val player: PlayerRelation? = null,
 )
+
+sealed class EventVisibility {
+  data object PUBLIC : EventVisibility()
+  data class PRIVATE_TO_PLAYER(val playerId: PlayerId) : EventVisibility()
+  data class PRIVATE_TO_PLAYERS(val playerIds: Set<PlayerId>) : EventVisibility()
+  data object INTERNAL : EventVisibility()
+}
+
+data class GameEvent(
+  val id: EventId,
+  val sequence: Long,
+  val type: GameEventType,
+  val sourceCardId: CardInstanceId?,
+  val payload: GameEventPayload,
+  val visibility: EventVisibility,
+)
+
+sealed class GameEventPayload {
+  data class GameCreatedPayload(
+    val playerIds: List<PlayerId>,
+    val firstPlayerId: PlayerId,
+    val chooserPlayerId: PlayerId,
+    val formatId: String,
+  ) : GameEventPayload()
+
+  data class SetupStepChangedPayload(
+    val previousStep: GameSetupStep,
+    val newStep: GameSetupStep,
+  ) : GameEventPayload()
+
+  data class GameStartedPayload(
+    val firstPlayerId: PlayerId,
+  ) : GameEventPayload()
+
+  data class TurnStartedPayload(
+    val turnNumber: Int,
+    val playerId: PlayerId,
+  ) : GameEventPayload()
+
+  data class PhaseChangedPayload(
+    val playerId: PlayerId,
+    val previousPhase: GamePhase,
+    val newPhase: GamePhase,
+  ) : GameEventPayload()
+
+  data class TurnEndedPayload(
+    val turnNumber: Int,
+    val playerId: PlayerId,
+  ) : GameEventPayload()
+
+  data class CardPlayedPayload(
+    val cardId: CardInstanceId,
+    val playerId: PlayerId,
+    val fromZone: ZoneType,
+    val toZone: ZoneType,
+  ) : GameEventPayload()
+
+  data class CardsDrawnPayload(
+    val playerId: PlayerId,
+    val cardIds: List<CardInstanceId>,
+  ) : GameEventPayload()
+
+  data class CardMovedPayload(
+    val cardId: CardInstanceId,
+    val fromPlayerId: PlayerId,
+    val fromZone: ZoneType,
+    val toPlayerId: PlayerId,
+    val toZone: ZoneType,
+    val destinationIndex: Int?,
+    val newObjectId: CardObjectId?,
+    val orientation: CardOrientation,
+    val faceState: FaceState,
+    val visibility: CardVisibility,
+  ) : GameEventPayload()
+
+  data class CardRevealedPayload(
+    val cardIds: List<CardInstanceId>,
+    val visibility: CardVisibility,
+  ) : GameEventPayload()
+
+  data class CardStateChangedPayload(
+    val cardId: CardInstanceId,
+    val orientation: CardOrientation,
+    val faceState: FaceState,
+  ) : GameEventPayload()
+
+  data class CardActivatedPayload(
+    val cardId: CardInstanceId,
+    val playerId: PlayerId,
+  ) : GameEventPayload()
+
+  data class CardKnockedOutPayload(
+    val cardId: CardInstanceId,
+    val ownerId: PlayerId,
+    val sourceCardId: CardInstanceId?,
+    val effectId: EffectId?,
+  ) : GameEventPayload()
+
+  data class DonAddedPayload(
+    val playerId: PlayerId,
+    val donCardIds: List<CardInstanceId>,
+  ) : GameEventPayload()
+
+  data class DonRestedPayload(
+    val playerId: PlayerId,
+    val donCardIds: List<CardInstanceId>,
+  ) : GameEventPayload()
+
+  data class DonAttachedPayload(
+    val hostCardId: CardInstanceId,
+    val donCardIds: List<CardInstanceId>,
+  ) : GameEventPayload()
+
+  data class DonDetachedPayload(
+    val hostCardId: CardInstanceId,
+    val donCardIds: List<CardInstanceId>,
+    val destinationPlayerId: PlayerId,
+    val destinationZone: ZoneType,
+    val destinationIndex: Int?,
+  ) : GameEventPayload()
+
+  data class DonReturnedPayload(
+    val playerId: PlayerId,
+    val donCardIds: List<CardInstanceId>,
+  ) : GameEventPayload()
+
+  data class AttackDeclaredPayload(
+    val attackerId: CardInstanceId,
+    val target: BattleTarget,
+  ) : GameEventPayload()
+
+  data class BlockActivatedPayload(
+    val blockerId: CardInstanceId,
+    val previousTarget: BattleTarget,
+    val newTarget: BattleTarget,
+  ) : GameEventPayload()
+
+  data class CounterActivatedPayload(
+    val playerId: PlayerId,
+    val cardId: CardInstanceId,
+    val targetCardId: CardInstanceId,
+    val powerAdded: Int,
+  ) : GameEventPayload()
+
+  data class BattleEndedPayload(
+    val attackerId: CardInstanceId,
+    val finalTarget: BattleTarget,
+    val outcome: BattleOutcome,
+  ) : GameEventPayload()
+
+  data class DamageProcessedPayload(
+    val playerId: PlayerId,
+    val amount: Int,
+    val sourceCardId: CardInstanceId?,
+    val effectId: EffectId?,
+  ) : GameEventPayload()
+
+  data class LifeChangedPayload(
+    val playerId: PlayerId,
+    val addedCardIds: List<CardInstanceId>,
+    val removedCardIds: List<CardInstanceId>,
+    val destinationZone: ZoneType?,
+  ) : GameEventPayload()
+
+  data class EffectActivatedPayload(
+    val effectId: EffectId,
+    val sourceCardId: CardInstanceId?,
+    val abilityId: AbilityId?,
+  ) : GameEventPayload()
+
+  data class EffectResolvedPayload(
+    val effectId: EffectId,
+  ) : GameEventPayload()
+
+  data class EffectFailedPayload(
+    val effectId: EffectId,
+    val errorCode: String,
+  ) : GameEventPayload()
+
+  data class ModifierAddedPayload(
+    val effect: ActiveEffect,
+  ) : GameEventPayload()
+
+  data class ModifierExpiredPayload(
+    val effectId: EffectId,
+  ) : GameEventPayload()
+
+  data class ReplacementAppliedPayload(
+    val replacementId: EffectId,
+    val replacedEventId: EventId,
+  ) : GameEventPayload()
+
+  data class DeckShuffledPayload(
+    val playerId: PlayerId,
+    val zone: ZoneType,
+    val resultingOrder: List<CardInstanceId>,
+    val randomStateAfter: RandomState,
+  ) : GameEventPayload()
+
+  data class ChoiceSubmittedPayload(
+    val playerId: PlayerId,
+    val choiceId: ChoiceId,
+    val answer: ChoiceAnswer,
+  ) : GameEventPayload()
+
+  data class MulliganResolvedPayload(
+    val playerId: PlayerId,
+    val redrawn: Boolean,
+    val returnedCardIds: List<CardInstanceId>,
+  ) : GameEventPayload()
+
+  data class PlayerWonPayload(
+    val playerId: PlayerId,
+    val reason: GameEndReason,
+  ) : GameEventPayload()
+
+  data class PlayerLostPayload(
+    val playerId: PlayerId,
+    val reason: GameEndReason,
+  ) : GameEventPayload()
+
+  data class GameDrawnPayload(
+    val playerIds: Set<PlayerId>,
+    val reason: GameEndReason,
+  ) : GameEventPayload()
+}
