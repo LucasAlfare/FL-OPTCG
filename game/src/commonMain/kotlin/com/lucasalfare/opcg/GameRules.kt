@@ -29,7 +29,7 @@ class RulesEngine(
   private val turnController = TurnController()
   private val mainPhaseController = MainPhaseController()
   private val battleResolver = BattleResolver(cardCatalog)
-  private val damageProcessor = DamageProcessor()
+  private val damageProcessor = DamageProcessor(cardCatalog)
   private val costProcessor = CostProcessor()
   private val effectScheduler = EffectScheduler(cardCatalog)
   private val continuousEffectProcessor = ContinuousEffectProcessor(cardCatalog)
@@ -87,7 +87,7 @@ class RulesEngine(
   }
 
   fun advanceBattleStep(state: GameState): GameTransition {
-    return battleResolver.advanceStep(state, continuousEffectProcessor, this)
+    return battleResolver.advanceStep(state, continuousEffectProcessor, damageProcessor, this)
   }
 
   fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
@@ -388,6 +388,13 @@ class RulesEngine(
         ).copy(id = instruction.definition.id, sourceAbilityId = context.abilityId)
         InstructionExecutionResult.Completed(null, listOf(modifierAddedEvent(state, effect, seq)))
       }
+
+      is KnockOut -> damageProcessor.executeKnockOut(
+        state, instruction, context, variables, replacementProcessor, continuous, cardCatalog
+      )
+
+      is DealDamage -> damageProcessor.executeDealDamage(state, instruction, context, variables, this, continuous)
+      is SetLife -> damageProcessor.executeSetLife(state, instruction, context, variables)
 
       is Draw -> zoneInstructionExecutor.draw(state, instruction, context, variables, this)
       is MoveCards -> zoneInstructionExecutor.moveCards(state, instruction, context, variables, this)
@@ -1525,7 +1532,6 @@ internal class TurnController {
     seq = refresh.lastSequence
 
     phaseChanged(state, playerId, null, GamePhase.REFRESH, seq)
-    // REFRESH already conceptually active; emit REFRESH then DRAW progression inside helpers
 
     val draw = runDraw(state, playerId, turnNumber, seq)
     events += draw.events
@@ -1679,7 +1685,6 @@ internal class TurnController {
 
     val player = state.players[playerId] ?: return PhaseResult(events, seq)
 
-    // Return attached DON!! from leader/characters controlled by turn player to Cost rested
     for (attachment in state.donAttachments) {
       val host = state.cards[attachment.hostCardId] ?: continue
       val controller = continuous.effectiveController(state, host.id) ?: host.controllerId
@@ -1722,7 +1727,6 @@ internal class TurnController {
       }
     }
 
-    // Activate rested cards in Leader, Character, Stage, Cost
     val zonesToActivate = listOf(player.leader.cards, player.characters.cards, player.stage.cards, player.cost.cards)
     for (zoneCards in zonesToActivate) {
       for (cardId in zoneCards) {
@@ -2666,14 +2670,6 @@ internal class BattleResolver(
       violations += RuleViolation("INVALID_ATTACKER_ZONE", "Attacker must be Leader or Character")
     }
 
-    val def = cardCatalog.get(attacker.definitionId)
-    val keywords = continuous.effectiveCharacteristics(state, command.attackerId)?.keywords ?: def?.keywords.orEmpty()
-    if (inCharacter && KeywordEffect.RUSH !in keywords && KeywordEffect.RUSH_CHARACTER !in keywords) {
-      // Newly played characters without Rush cannot attack; without explicit "played this turn" flag,
-      // only enforce when the card was activated this turn via ability usage is unavailable.
-      // Keep legal if active; GameEngine may refine with play-turn tracking.
-    }
-
     when (val target = command.targetId) {
       is BattleTarget.PlayerTarget -> {
         violations += RuleViolation("INVALID_TARGET", "Direct player target is not used; target Leader or Character")
@@ -2738,7 +2734,6 @@ internal class BattleResolver(
     )
     events += declared
 
-    // BattleState is applied by reducer from ATTACK_DECLARED; processEvents schedules When Attacking / On Opponent Attack
     val auto = evaluator.processEvents(
       state.copy(
         battle = BattleState(
@@ -2997,7 +2992,6 @@ internal class BattleResolver(
     var seq = state.lastEventSequence
     val programs = mutableListOf<ProgramRequest>()
 
-    // Pay declarative cost of the Counter ability (not the Event's play cost)
     when (val cost = ability.cost) {
       is Cost.NoCost -> Unit
       is Cost.RestDonCost -> {
@@ -3023,10 +3017,6 @@ internal class BattleResolver(
             visibility = EventVisibility.PUBLIC,
           )
         }
-      }
-
-      is Cost.RestSourceCost -> {
-        // N/A for hand events
       }
 
       else -> Unit
@@ -3121,6 +3111,7 @@ internal class BattleResolver(
   fun advanceStep(
     state: GameState,
     continuous: ContinuousEffectProcessor,
+    damageProcessor: DamageProcessor,
     evaluator: RulesEngine,
   ): GameTransition {
     val battle = state.battle ?: return GameTransition(emptyList(), emptyList())
@@ -3131,11 +3122,7 @@ internal class BattleResolver(
       BattleStep.ATTACK -> moveToStep(state, BattleStep.BLOCK)
       BattleStep.BLOCK -> moveToStep(state, BattleStep.COUNTER)
       BattleStep.COUNTER -> moveToStep(state, BattleStep.DAMAGE)
-      BattleStep.DAMAGE -> {
-        // Damage resolution is Etapa 25; close battle window shell here if already past responses
-        endBattle(state, battle, BattleOutcome.NO_DAMAGE)
-      }
-
+      BattleStep.DAMAGE -> damageProcessor.processDamage(state, battle, continuous, evaluator)
       BattleStep.END -> endBattle(state, battle, BattleOutcome.NO_DAMAGE)
     }
   }
@@ -3177,8 +3164,6 @@ internal class BattleResolver(
   }
 
   private fun moveToStep(state: GameState, step: BattleStep): GameTransition {
-    // Step transitions are applied by reducer; emit no dedicated event type beyond battle flow.
-    // Returning empty keeps determinism; GameEngine advances BattleState.step via internal apply.
     return GameTransition(emptyList(), emptyList())
   }
 
@@ -3200,7 +3185,368 @@ internal class BattleResolver(
   }
 }
 
-internal class DamageProcessor
+internal class DamageProcessor(
+  private val cardCatalog: CardCatalog,
+) {
+
+  fun processDamage(
+    state: GameState,
+    battle: BattleState,
+    continuous: ContinuousEffectProcessor,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    state.cards[battle.attackerId] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+    val attackerPower = continuous.effectiveCharacteristics(state, battle.attackerId)?.power ?: 0
+
+    val targetPlayerId: PlayerId
+    val targetCardId: CardInstanceId?
+    val isLeaderTarget: Boolean
+
+    when (val target = battle.currentTarget) {
+      is BattleTarget.CardTarget -> {
+        val targetCard =
+          state.cards[target.cardInstanceId] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+        val targetController = continuous.effectiveController(state, target.cardInstanceId) ?: targetCard.controllerId
+        val player = state.players[targetController] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+        isLeaderTarget = target.cardInstanceId in player.leader.cards
+        targetPlayerId = targetController
+        targetCardId = target.cardInstanceId
+      }
+
+      is BattleTarget.PlayerTarget -> {
+        isLeaderTarget = true
+        targetPlayerId = target.playerId
+        targetCardId = state.players[target.playerId]?.leader?.cards?.firstOrNull()
+      }
+    }
+
+    val targetBasePower = targetCardId?.let { continuous.effectiveCharacteristics(state, it)?.power ?: 0 } ?: 0
+    val finalTargetPower = targetBasePower + battle.counterPower
+
+    if (attackerPower < finalTargetPower) {
+      return endBattleResult(state, battle, BattleOutcome.ATTACKER_LOST)
+    }
+
+    val events = mutableListOf<GameEvent>()
+    val programs = mutableListOf<ProgramRequest>()
+    var seq = state.lastEventSequence
+
+    if (isLeaderTarget) {
+      val defenderPlayer =
+        state.players[targetPlayerId] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+      if (defenderPlayer.life.cards.isEmpty()) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.PLAYER_LOST,
+          sourceCardId = battle.attackerId,
+          payload = GameEventPayload.PlayerLostPayload(targetPlayerId, GameEndReason.LIFE_DEFEAT),
+          visibility = EventVisibility.PUBLIC,
+        )
+        return GameTransition(events, programs)
+      }
+
+      val attackerChars = continuous.effectiveCharacteristics(state, battle.attackerId)
+      val isDoubleAttack = attackerChars?.keywords?.contains(KeywordEffect.DOUBLE_ATTACK) == true
+      val isBanish = attackerChars?.keywords?.contains(KeywordEffect.BANISH) == true
+      val damageCount = if (isDoubleAttack) 2 else 1
+
+      for (i in 0 until damageCount) {
+        val currentDefender = state.players[targetPlayerId] ?: break
+        if (currentDefender.life.cards.isEmpty()) {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.PLAYER_LOST,
+            sourceCardId = battle.attackerId,
+            payload = GameEventPayload.PlayerLostPayload(targetPlayerId, GameEndReason.LIFE_DEFEAT),
+            visibility = EventVisibility.PUBLIC,
+          )
+          break
+        }
+
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.DAMAGE_PROCESSED,
+          sourceCardId = battle.attackerId,
+          payload = GameEventPayload.DamageProcessedPayload(targetPlayerId, 1, battle.attackerId, null),
+          visibility = EventVisibility.PUBLIC,
+        )
+
+        val lifeCardId = currentDefender.life.cards.first()
+        if (isBanish) {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.CARD_MOVED,
+            sourceCardId = lifeCardId,
+            payload = GameEventPayload.CardMovedPayload(
+              cardId = lifeCardId,
+              fromPlayerId = targetPlayerId,
+              fromZone = ZoneType.LIFE,
+              toPlayerId = targetPlayerId,
+              toZone = ZoneType.TRASH,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_UP,
+              visibility = CardVisibility.PUBLIC,
+            ),
+            visibility = EventVisibility.PUBLIC,
+          )
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.LIFE_CHANGED,
+            sourceCardId = null,
+            payload = GameEventPayload.LifeChangedPayload(
+              targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.TRASH
+            ),
+            visibility = EventVisibility.PUBLIC,
+          )
+        } else {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.CARD_MOVED,
+            sourceCardId = lifeCardId,
+            payload = GameEventPayload.CardMovedPayload(
+              cardId = lifeCardId,
+              fromPlayerId = targetPlayerId,
+              fromZone = ZoneType.LIFE,
+              toPlayerId = targetPlayerId,
+              toZone = ZoneType.HAND,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_DOWN,
+              visibility = CardVisibility.OWNER_ONLY,
+            ),
+            visibility = EventVisibility.PUBLIC,
+          )
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.LIFE_CHANGED,
+            sourceCardId = null,
+            payload = GameEventPayload.LifeChangedPayload(
+              targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.HAND
+            ),
+            visibility = EventVisibility.PUBLIC,
+          )
+        }
+      }
+    } else if (targetCardId != null) {
+      val targetCard = state.cards[targetCardId]
+      if (targetCard != null) {
+        val ownerId = targetCard.ownerId
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_KNOCKED_OUT,
+          sourceCardId = targetCardId,
+          payload = GameEventPayload.CardKnockedOutPayload(targetCardId, ownerId, battle.attackerId, null),
+          visibility = EventVisibility.PUBLIC,
+        )
+
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = targetCardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = targetCardId,
+            fromPlayerId = ownerId,
+            fromZone = ZoneType.CHARACTER,
+            toPlayerId = ownerId,
+            toZone = ZoneType.TRASH,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
+    }
+
+    val endBattleTransition = endBattleResult(state, battle, BattleOutcome.ATTACKER_WON)
+    return GameTransition(events + endBattleTransition.events, programs + endBattleTransition.programsToRun)
+  }
+
+  fun executeKnockOut(
+    state: GameState,
+    instruction: KnockOut,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    replacementProcessor: ReplacementProcessor,
+    continuous: ContinuousEffectProcessor,
+    cardCatalog: CardCatalog,
+  ): InstructionExecutionResult {
+    val cardIds = when (val source = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> source.value
+      is StoredValue.CardValue -> listOf(source.value)
+      else -> return InstructionExecutionResult.Completed(null, emptyList())
+    }
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    for (cardId in cardIds) {
+      val card = state.cards[cardId] ?: continue
+      val ownerId = card.ownerId
+
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_KNOCKED_OUT,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardKnockedOutPayload(cardId, ownerId, context.sourceCardId, instruction.effectId),
+        visibility = EventVisibility.PUBLIC,
+      )
+
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = cardId,
+          fromPlayerId = ownerId,
+          fromZone = ZoneType.CHARACTER,
+          toPlayerId = ownerId,
+          toZone = ZoneType.TRASH,
+          destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_UP,
+          visibility = CardVisibility.PUBLIC,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun executeDealDamage(
+    state: GameState,
+    instruction: DealDamage,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+    continuous: ContinuousEffectProcessor,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      (it as? StoredValue.IntegerValue)?.value ?: return InstructionExecutionResult.Completed(null, emptyList())
+    }.coerceAtLeast(0)
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    for (i in 0 until amount) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DAMAGE_PROCESSED,
+        sourceCardId = context.sourceCardId,
+        payload = GameEventPayload.DamageProcessedPayload(
+          instruction.playerId, 1, context.sourceCardId, instruction.effectId
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun executeSetLife(
+    state: GameState,
+    instruction: SetLife,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val cardIds = when (val source = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> source.value
+      is StoredValue.CardValue -> listOf(source.value)
+      else -> return InstructionExecutionResult.Completed(null, emptyList())
+    }
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    for (cardId in cardIds) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = cardId,
+          fromPlayerId = instruction.playerId,
+          fromZone = ZoneType.TRASH,
+          toPlayerId = instruction.playerId,
+          toZone = ZoneType.LIFE,
+          destinationIndex = when (instruction.position) {
+            LifePosition.TOP -> 0
+            else -> null
+          },
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_DOWN,
+          visibility = CardVisibility.OWNER_ONLY,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.LIFE_CHANGED,
+        sourceCardId = null,
+        payload = GameEventPayload.LifeChangedPayload(instruction.playerId, listOf(cardId), emptyList(), ZoneType.LIFE),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  private fun endBattleResult(state: GameState, battle: BattleState, outcome: BattleOutcome): GameTransition {
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.BATTLE_ENDED,
+      sourceCardId = battle.attackerId,
+      payload = GameEventPayload.BattleEndedPayload(
+        attackerId = battle.attackerId,
+        finalTarget = battle.currentTarget,
+        outcome = outcome,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return GameTransition(listOf(event), emptyList())
+  }
+}
 
 internal class EffectScheduler(
   private val cardCatalog: CardCatalog,
@@ -3263,8 +3609,6 @@ internal class EffectScheduler(
       val transition = activateAbility(working, resolved, evaluator)
       events += transition.events
       programs += transition.programsToRun
-      // Consume usage optimistically in local mirror via synthetic state fields is not applied here;
-      // events carry the activation. Limits checked against original state usage map + count in batch.
     }
     return InstructionExecutionResult.Completed(null, events)
   }
@@ -3394,11 +3738,9 @@ internal class EffectScheduler(
   }
 
   private fun orderScheduled(state: GameState, items: List<ScheduledAuto>): List<ScheduledAuto> {
-    // Official-style: non-turn player first, then turn player; within group by card id then ability id for determinism
-    state.turn?.playerId
     return items.sortedWith(
-      compareBy<ScheduledAuto> { it.turnPlayerOwns } // false (non-turn) first
-        .thenBy { it.cardId.value }.thenBy { it.ability.id.value }.thenBy { it.triggerEvent.sequence },
+      compareBy<ScheduledAuto> { it.turnPlayerOwns }.thenBy { it.cardId.value }.thenBy { it.ability.id.value }
+        .thenBy { it.triggerEvent.sequence },
     )
   }
 
@@ -3615,7 +3957,6 @@ internal class EffectScheduler(
     val results = mutableListOf<Pair<CardInstanceId, ActivatedAbilityDefinition>>()
     for ((cardId, instance) in state.cards) {
       if (selector.cardSelector != null) {
-        // lightweight filter: category/name only if set
         val def = cardCatalog.get(instance.definitionId) ?: continue
         val sel = selector.cardSelector
         if (sel.categories.isNotEmpty() && def.category !in sel.categories) continue
@@ -3689,7 +4030,7 @@ internal class EffectScheduler(
         all
       }
 
-      is Cost.TrashCardsCost -> emptyList() // selection requires player choice; validated elsewhere
+      is Cost.TrashCardsCost -> emptyList()
     }
   }
 
@@ -3714,12 +4055,6 @@ internal class EffectScheduler(
   ): GameTransition {
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
-
-    // Consume usage as soon as activation and cost payment begin
-    if (resolved.ability.usageLimit == UsageLimit.ONCE_PER_TURN) {
-      // usage is persisted by EventApplier/reducer via EFFECT_ACTIVATED side channel later;
-      // still emit activation so GameEngine can update abilityUsage deterministically.
-    }
 
     if (resolved.costPayment.isNotEmpty()) {
       when (resolved.ability.cost) {
@@ -3752,9 +4087,6 @@ internal class EffectScheduler(
               payload = GameEventPayload.DonRestedPayload(resolved.controllerId, dons),
               visibility = EventVisibility.PUBLIC,
             )
-          }
-          if (resolved.ability.cost is Cost.RestSourceCost || resolved.costPayment.any { it == resolved.cardId }) {
-            // already handled
           }
         }
 
@@ -3810,7 +4142,5 @@ internal class EffectScheduler(
 }
 
 internal class RuleProcessor
-
 internal class InformationManager
-
 internal class LoopProcessor
