@@ -1,4 +1,4 @@
-@file:Suppress("UnusedPrivateMember")
+@file:Suppress("Unused")
 
 package com.lucasalfare.opcg
 
@@ -501,6 +501,17 @@ data class GameManifest(
   val gameFormatId: String,
 )
 
+data class GameSetupState(
+  val step: GameSetupStep,
+  val pendingMulliganPlayers: Set<PlayerId>,
+  val completedMulligans: Set<PlayerId>,
+)
+
+data class GameCreationResult(
+  val initialState: GameState,
+  val initialEvents: List<GameEvent>,
+)
+
 data class GameState(
   val id: GameId,
   val status: GameStatus,
@@ -515,6 +526,7 @@ data class GameState(
   val activeEffects: List<ActiveEffect>,
   val activePrograms: List<ProgramFrame> = emptyList(),
   val pendingChoices: List<PendingChoice> = emptyList(),
+  val setup: GameSetupState? = null,
   val randomState: RandomState,
   val lastEventSequence: Long,
   val result: GameResult?,
