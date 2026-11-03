@@ -1,4 +1,4 @@
-@file:Suppress("Unused")
+@file:Suppress("UnusedPrivateMember")
 
 package com.lucasalfare.opcg
 
@@ -512,6 +512,12 @@ data class GameCreationResult(
   val initialEvents: List<GameEvent>,
 )
 
+data class AbilityUsageKey(
+  val cardObjectId: CardObjectId,
+  val abilityId: AbilityId,
+  val turnNumber: Int,
+)
+
 data class GameState(
   val id: GameId,
   val status: GameStatus,
@@ -527,6 +533,7 @@ data class GameState(
   val activePrograms: List<ProgramFrame> = emptyList(),
   val pendingChoices: List<PendingChoice> = emptyList(),
   val setup: GameSetupState? = null,
+  val abilityUsage: Map<AbilityUsageKey, Int> = emptyMap(),
   val randomState: RandomState,
   val lastEventSequence: Long,
   val result: GameResult?,

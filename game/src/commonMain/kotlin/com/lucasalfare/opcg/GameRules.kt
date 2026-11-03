@@ -31,7 +31,7 @@ class RulesEngine(
   private val battleResolver = BattleResolver()
   private val damageProcessor = DamageProcessor()
   private val costProcessor = CostProcessor()
-  private val effectScheduler = EffectScheduler()
+  private val effectScheduler = EffectScheduler(cardCatalog)
   private val continuousEffectProcessor = ContinuousEffectProcessor(cardCatalog)
   private val replacementProcessor = ReplacementProcessor()
   private val ruleProcessor = RuleProcessor()
@@ -47,6 +47,7 @@ class RulesEngine(
       is PlayCardCommand -> mainPhaseController.validatePlayCard(state, command, cardCatalog, continuousEffectProcessor)
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
       is EndMainPhaseCommand -> mainPhaseController.validateEndMain(state, command)
+      is ActivateAbilityCommand -> effectScheduler.validateActivate(state, command, this)
       else -> ValidationResult(true, emptyList())
     }
   }
@@ -63,12 +64,13 @@ class RulesEngine(
 
       is GiveDonCommand -> mainPhaseController.processGiveDon(state, command, continuousEffectProcessor)
       is EndMainPhaseCommand -> turnController.endMainPhase(state, command.playerId)
+      is ActivateAbilityCommand -> effectScheduler.processActivate(state, command, this)
       else -> GameTransition(events = emptyList(), programsToRun = emptyList())
     }
   }
 
   fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
-    throw UnsupportedOperationException("Not implemented")
+    return effectScheduler.processEvents(state, events, this)
   }
 
   fun processAutomaticRules(state: GameState): GameTransition {
@@ -382,6 +384,8 @@ class RulesEngine(
       is DetachDon -> donInstructionExecutor.detachDon(state, instruction, context, variables, this)
       is RestCards -> zoneInstructionExecutor.restCards(state, instruction, context, variables)
       is SetCardState -> zoneInstructionExecutor.setCardState(state, instruction, context, variables)
+
+      is ActivateAbility -> effectScheduler.executeActivateInstruction(state, instruction, context, variables, this)
 
       else -> failExec("UNSUPPORTED_INSTRUCTION", "Instruction not handled: ${instruction::class.simpleName}", 0)
     }
@@ -1428,7 +1432,6 @@ internal class GameFactory(
     return result to next
   }
 }
-
 
 internal object RandomSupport {
   fun fisherYates(
@@ -2606,7 +2609,612 @@ internal class BattleResolver
 
 internal class DamageProcessor
 
-internal class EffectScheduler
+internal class EffectScheduler(
+  private val cardCatalog: CardCatalog,
+) {
+
+  private val ignoredTriggerTypes = setOf(
+    GameEventType.PROGRAM_FRAME_CHANGED,
+    GameEventType.PENDING_CHOICE_CHANGED,
+  )
+
+  fun validateActivate(
+    state: GameState,
+    command: ActivateAbilityCommand,
+    evaluator: RulesEngine,
+  ): ValidationResult {
+    val result =
+      resolveActivatedAbility(state, command.playerId, command.sourceCardId, command.abilityId, null, evaluator)
+    return when (result) {
+      is AbilityResolveResult.Ok -> ValidationResult(true, emptyList())
+      is AbilityResolveResult.Invalid -> ValidationResult(false, result.violations)
+    }
+  }
+
+  fun processActivate(
+    state: GameState,
+    command: ActivateAbilityCommand,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val resolved =
+      resolveActivatedAbility(state, command.playerId, command.sourceCardId, command.abilityId, null, evaluator)
+    if (resolved is AbilityResolveResult.Invalid) {
+      return GameTransition(emptyList(), emptyList())
+    }
+    resolved as AbilityResolveResult.Ok
+    return activateAbility(state, resolved, evaluator)
+  }
+
+  fun executeActivateInstruction(
+    state: GameState,
+    instruction: ActivateAbility,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val matches = findActivatedAbilities(state, instruction.selector, instruction.timing)
+    if (matches.isEmpty()) {
+      return InstructionExecutionResult.Completed(null, emptyList())
+    }
+    val events = mutableListOf<GameEvent>()
+    val programs = mutableListOf<ProgramRequest>()
+    var working = state
+    for ((cardId, ability) in matches) {
+      val card = working.cards[cardId] ?: continue
+      val controller = evaluator.effectiveController(working, cardId) ?: card.controllerId
+      val resolved = resolveActivatedAbility(
+        working, controller, cardId, ability.id, instruction.timing, evaluator,
+      )
+      if (resolved is AbilityResolveResult.Invalid) continue
+      resolved as AbilityResolveResult.Ok
+      val transition = activateAbility(working, resolved, evaluator)
+      events += transition.events
+      programs += transition.programsToRun
+      // Consume usage optimistically in local mirror via synthetic state fields is not applied here;
+      // events carry the activation. Limits checked against original state usage map + count in batch.
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun processEvents(
+    state: GameState,
+    events: List<GameEvent>,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val triggerEvents = events.filter { event ->
+      event.type !in ignoredTriggerTypes && event.visibility != EventVisibility.INTERNAL
+    }
+    if (triggerEvents.isEmpty()) {
+      return GameTransition(emptyList(), emptyList())
+    }
+
+    val outEvents = mutableListOf<GameEvent>()
+    val programs = mutableListOf<ProgramRequest>()
+    val consumedKeys = mutableMapOf<AbilityUsageKey, Int>()
+    val scheduled = mutableListOf<ScheduledAuto>()
+
+    for (event in triggerEvents) {
+      scheduled += collectAutoAbilities(state, event, evaluator, consumedKeys)
+    }
+
+    val ordered = orderScheduled(state, scheduled)
+    var seq = state.lastEventSequence + events.size
+    for (item in ordered) {
+      val key = usageKey(state, item.cardId, item.ability.id)
+      if (item.ability.usageLimit == UsageLimit.ONCE_PER_TURN) {
+        val prior = (state.abilityUsage[key] ?: 0) + (consumedKeys[key] ?: 0)
+        if (prior >= 1) continue
+        consumedKeys[key] = prior + 1
+      }
+
+      seq += 1
+      val activationEvent = GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.EFFECT_ACTIVATED,
+        sourceCardId = item.cardId,
+        payload = GameEventPayload.EffectActivatedPayload(
+          effectId = EffectId("${state.id.value}:auto:$seq"),
+          sourceCardId = item.cardId,
+          abilityId = item.ability.id,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+      outEvents += activationEvent
+      programs += ProgramRequest(
+        executionId = ExecutionId(activationEvent.id.value),
+        program = item.ability.program,
+        context = EffectContext(
+          gameId = state.id,
+          controllerId = item.controllerId,
+          sourceCardId = item.cardId,
+          abilityId = item.ability.id,
+          triggeringEvent = item.triggerEvent,
+        ),
+      )
+    }
+
+    return GameTransition(events = outEvents, programsToRun = programs)
+  }
+
+  private data class ScheduledAuto(
+    val cardId: CardInstanceId,
+    val controllerId: PlayerId,
+    val ability: AutoAbilityDefinition,
+    val triggerEvent: GameEvent,
+    val turnPlayerOwns: Boolean,
+  )
+
+  private fun collectAutoAbilities(
+    state: GameState,
+    event: GameEvent,
+    evaluator: RulesEngine,
+    consumedKeys: MutableMap<AbilityUsageKey, Int>,
+  ): List<ScheduledAuto> {
+    val results = mutableListOf<ScheduledAuto>()
+    for (cardId in state.cards.keys.sortedBy { it.value }) {
+      val instance = state.cards[cardId] ?: continue
+      val definition = cardCatalog.get(instance.definitionId) ?: continue
+      val controller = evaluator.effectiveController(state, cardId) ?: instance.controllerId
+      val abilities =
+        definition.abilities.filterIsInstance<AutoAbilityDefinition>() + grantedAutoAbilities(state, cardId)
+      for (ability in abilities) {
+        if (!matchesPattern(ability.trigger, event, state, cardId, controller, evaluator)) continue
+        if (ability.condition != null) {
+          val ctx = EffectContext(
+            gameId = state.id,
+            controllerId = controller,
+            sourceCardId = cardId,
+            abilityId = ability.id,
+            triggeringEvent = event,
+          )
+          when (val cond = evaluator.evaluateCondition(ability.condition, state, ctx, emptyMap())) {
+            is EvaluationResult.Failed -> continue
+            is EvaluationResult.Success -> if (!cond.value) continue
+          }
+        }
+        if (ability.usageLimit == UsageLimit.ONCE_PER_TURN) {
+          val key = usageKey(state, cardId, ability.id)
+          val prior = (state.abilityUsage[key] ?: 0) + (consumedKeys[key] ?: 0)
+          if (prior >= 1) continue
+        }
+        val turnPlayer = state.turn?.playerId
+        results += ScheduledAuto(
+          cardId = cardId,
+          controllerId = controller,
+          ability = ability,
+          triggerEvent = event,
+          turnPlayerOwns = turnPlayer != null && controller == turnPlayer,
+        )
+      }
+    }
+    return results
+  }
+
+  private fun grantedAutoAbilities(state: GameState, cardId: CardInstanceId): List<AutoAbilityDefinition> {
+    return state.activeEffects.mapNotNull { effect ->
+      if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
+      val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
+      if (!modifier.add) return@mapNotNull null
+      modifier.ability as? AutoAbilityDefinition
+    }
+  }
+
+  private fun orderScheduled(state: GameState, items: List<ScheduledAuto>): List<ScheduledAuto> {
+    // Official-style: non-turn player first, then turn player; within group by card id then ability id for determinism
+    state.turn?.playerId
+    return items.sortedWith(
+      compareBy<ScheduledAuto> { it.turnPlayerOwns } // false (non-turn) first
+        .thenBy { it.cardId.value }.thenBy { it.ability.id.value }.thenBy { it.triggerEvent.sequence },
+    )
+  }
+
+  private fun matchesPattern(
+    pattern: GameEventPattern,
+    event: GameEvent,
+    state: GameState,
+    sourceCardId: CardInstanceId,
+    controllerId: PlayerId,
+    evaluator: RulesEngine,
+  ): Boolean {
+    if (pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes) return false
+
+    if (pattern.source != null) {
+      val sourceId = event.sourceCardId ?: return false
+      if (!cardMatchesSelector(pattern.source, state, sourceId, controllerId, evaluator, event)) return false
+    }
+
+    if (pattern.target != null) {
+      val targetIds = extractTargetCardIds(event)
+      if (targetIds.isEmpty()) return false
+      if (targetIds.none {
+          cardMatchesSelector(
+            pattern.target, state, it, controllerId, evaluator, event
+          )
+        }) return false
+    }
+
+    if (pattern.player != null) {
+      val eventPlayer = extractPlayer(event) ?: return false
+      val expected = resolveRelation(pattern.player, state, controllerId) ?: return false
+      if (eventPlayer != expected) return false
+    }
+
+    if (pattern.targetPlayer != null) {
+      val targetPlayer = extractTargetPlayer(event) ?: return false
+      val expected = resolveRelation(pattern.targetPlayer, state, controllerId) ?: return false
+      if (targetPlayer != expected) return false
+    }
+
+    return true
+  }
+
+  private fun cardMatchesSelector(
+    selector: CardSelector,
+    state: GameState,
+    cardId: CardInstanceId,
+    controllerId: PlayerId,
+    evaluator: RulesEngine,
+    event: GameEvent,
+  ): Boolean {
+    val instance = state.cards[cardId] ?: return false
+    val definition = cardCatalog.get(instance.definitionId) ?: return false
+    if (selector.categories.isNotEmpty() && definition.category !in selector.categories) return false
+    if (selector.name != null && definition.name != selector.name) return false
+    if (selector.owner != null) {
+      val expected = resolveRelation(selector.owner, state, controllerId) ?: return false
+      if (instance.ownerId != expected) return false
+    }
+    if (selector.controller != null) {
+      val expected = resolveRelation(selector.controller, state, controllerId) ?: return false
+      val effective = evaluator.effectiveController(state, cardId) ?: instance.controllerId
+      if (effective != expected) return false
+    }
+    val effective = evaluator.effectiveCharacteristics(state, cardId)
+    if (effective != null) {
+      if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
+      if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
+      if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
+    }
+    return true
+  }
+
+  private fun extractTargetCardIds(event: GameEvent): List<CardInstanceId> = when (val p = event.payload) {
+    is GameEventPayload.CardMovedPayload -> listOf(p.cardId)
+    is GameEventPayload.CardPlayedPayload -> listOf(p.cardId)
+    is GameEventPayload.CardKnockedOutPayload -> listOf(p.cardId)
+    is GameEventPayload.CardActivatedPayload -> listOf(p.cardId)
+    is GameEventPayload.AttackDeclaredPayload -> listOf(p.attackerId)
+    is GameEventPayload.BlockActivatedPayload -> listOf(p.blockerId)
+    is GameEventPayload.DonAttachedPayload -> listOf(p.hostCardId)
+    is GameEventPayload.CardsDrawnPayload -> p.cardIds
+    else -> event.sourceCardId?.let { listOf(it) } ?: emptyList()
+  }
+
+  private fun extractPlayer(event: GameEvent): PlayerId? = when (val p = event.payload) {
+    is GameEventPayload.TurnStartedPayload -> p.playerId
+    is GameEventPayload.PhaseChangedPayload -> p.playerId
+    is GameEventPayload.TurnEndedPayload -> p.playerId
+    is GameEventPayload.CardPlayedPayload -> p.playerId
+    is GameEventPayload.CardsDrawnPayload -> p.playerId
+    is GameEventPayload.CardActivatedPayload -> p.playerId
+    is GameEventPayload.DonAddedPayload -> p.playerId
+    is GameEventPayload.DonRestedPayload -> p.playerId
+    is GameEventPayload.DamageProcessedPayload -> p.playerId
+    is GameEventPayload.LifeChangedPayload -> p.playerId
+    else -> null
+  }
+
+  private fun extractTargetPlayer(event: GameEvent): PlayerId? = when (val p = event.payload) {
+    is GameEventPayload.DamageProcessedPayload -> p.playerId
+    is GameEventPayload.LifeChangedPayload -> p.playerId
+    is GameEventPayload.CardKnockedOutPayload -> p.ownerId
+    is GameEventPayload.AttackDeclaredPayload -> when (val t = p.target) {
+      is BattleTarget.PlayerTarget -> t.playerId
+      is BattleTarget.CardTarget -> null
+    }
+
+    else -> null
+  }
+
+  private fun resolveRelation(relation: PlayerRelation, state: GameState, self: PlayerId): PlayerId? {
+    return when (relation) {
+      PlayerRelation.SELF -> self
+      PlayerRelation.OPPONENT -> state.playerOrder.firstOrNull { it != self }
+      PlayerRelation.TURN_PLAYER -> state.turn?.playerId
+      PlayerRelation.NON_TURN_PLAYER -> state.turn?.playerId?.let { tp -> state.playerOrder.firstOrNull { it != tp } }
+    }
+  }
+
+  private sealed class AbilityResolveResult {
+    data class Ok(
+      val cardId: CardInstanceId,
+      val ability: ActivatedAbilityDefinition,
+      val controllerId: PlayerId,
+      val objectId: CardObjectId,
+      val costPayment: List<CardInstanceId>,
+    ) : AbilityResolveResult()
+
+    data class Invalid(val violations: List<RuleViolation>) : AbilityResolveResult()
+  }
+
+  private fun resolveActivatedAbility(
+    state: GameState,
+    playerId: PlayerId,
+    sourceCardId: CardInstanceId,
+    abilityId: AbilityId,
+    requiredTiming: ActivationTiming?,
+    evaluator: RulesEngine,
+  ): AbilityResolveResult {
+    val violations = mutableListOf<RuleViolation>()
+    val card = state.cards[sourceCardId]
+    if (card == null) {
+      return AbilityResolveResult.Invalid(listOf(RuleViolation("UNKNOWN_CARD", "Source card not found")))
+    }
+    val controller = evaluator.effectiveController(state, sourceCardId) ?: card.controllerId
+    if (controller != playerId) {
+      violations += RuleViolation("NOT_CONTROLLER", "Player does not control the source card")
+    }
+    val definition = cardCatalog.get(card.definitionId)
+    if (definition == null) {
+      return AbilityResolveResult.Invalid(listOf(RuleViolation("UNKNOWN_DEFINITION", "Card definition missing")))
+    }
+    val ability = (definition.abilities + grantedActivatedAbilities(
+      state, sourceCardId
+    )).filterIsInstance<ActivatedAbilityDefinition>().firstOrNull { it.id == abilityId }
+    if (ability == null) {
+      return AbilityResolveResult.Invalid(listOf(RuleViolation("UNKNOWN_ABILITY", "Activated ability not found")))
+    }
+    if (requiredTiming != null && ability.timing != requiredTiming) {
+      violations += RuleViolation("TIMING_MISMATCH", "Ability timing does not match")
+    }
+    if (!isTimingLegal(state, ability.timing, playerId)) {
+      violations += RuleViolation("ILLEGAL_TIMING", "Ability cannot be activated in the current window")
+    }
+    if (ability.condition != null) {
+      val ctx = EffectContext(
+        gameId = state.id,
+        controllerId = playerId,
+        sourceCardId = sourceCardId,
+        abilityId = ability.id,
+        triggeringEvent = null,
+      )
+      when (val cond = evaluator.evaluateCondition(ability.condition, state, ctx, emptyMap())) {
+        is EvaluationResult.Failed -> violations += RuleViolation("CONDITION_ERROR", cond.error.message)
+        is EvaluationResult.Success -> if (!cond.value) violations += RuleViolation(
+          "CONDITION_FAILED", "Ability condition not met"
+        )
+      }
+    }
+    if (ability.usageLimit == UsageLimit.ONCE_PER_TURN) {
+      val key = AbilityUsageKey(card.objectId, ability.id, state.turn?.number ?: 0)
+      if ((state.abilityUsage[key] ?: 0) >= 1) {
+        violations += RuleViolation("USAGE_LIMIT", "Ability already used this turn")
+      }
+    }
+    val costPayment = mutableListOf<CardInstanceId>()
+    if (ability.cost !is Cost.NoCost) {
+      val paid = payCostPreview(state, playerId, ability.cost, sourceCardId, evaluator)
+      if (paid == null) {
+        violations += RuleViolation("COST_UNPAID", "Unable to pay ability cost")
+      } else {
+        costPayment += paid
+      }
+    }
+    if (violations.isNotEmpty()) return AbilityResolveResult.Invalid(violations)
+    return AbilityResolveResult.Ok(sourceCardId, ability, playerId, card.objectId, costPayment)
+  }
+
+  private fun grantedActivatedAbilities(state: GameState, cardId: CardInstanceId): List<ActivatedAbilityDefinition> {
+    return state.activeEffects.mapNotNull { effect ->
+      if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
+      val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
+      if (!modifier.add) return@mapNotNull null
+      modifier.ability as? ActivatedAbilityDefinition
+    }
+  }
+
+  private fun findActivatedAbilities(
+    state: GameState,
+    selector: AbilitySelector,
+    timing: ActivationTiming?,
+  ): List<Pair<CardInstanceId, ActivatedAbilityDefinition>> {
+    val results = mutableListOf<Pair<CardInstanceId, ActivatedAbilityDefinition>>()
+    for ((cardId, instance) in state.cards) {
+      if (selector.cardSelector != null) {
+        // lightweight filter: category/name only if set
+        val def = cardCatalog.get(instance.definitionId) ?: continue
+        val sel = selector.cardSelector
+        if (sel.categories.isNotEmpty() && def.category !in sel.categories) continue
+        if (sel.name != null && def.name != sel.name) continue
+      }
+      val def = cardCatalog.get(instance.definitionId) ?: continue
+      val abilities =
+        (def.abilities + grantedActivatedAbilities(state, cardId)).filterIsInstance<ActivatedAbilityDefinition>()
+      for (ability in abilities) {
+        if (selector.abilityId != null && ability.id != selector.abilityId) continue
+        if (selector.abilityType != null && selector.abilityType != AbilityType.ACTIVATED) continue
+        if (timing != null && ability.timing != timing) continue
+        if (selector.timing != null && ability.timing != selector.timing) continue
+        results += cardId to ability
+      }
+    }
+    return results.sortedBy { it.first.value + it.second.id.value }
+  }
+
+  private fun isTimingLegal(state: GameState, timing: ActivationTiming, playerId: PlayerId): Boolean {
+    val turn = state.turn
+    return when (timing) {
+      ActivationTiming.ACTIVATE_MAIN -> turn != null && turn.phase == GamePhase.MAIN && turn.playerId == playerId
+      ActivationTiming.COUNTER_STEP -> state.battle?.step == BattleStep.COUNTER
+      ActivationTiming.ON_BLOCK -> state.battle?.step == BattleStep.BLOCK
+      ActivationTiming.WHEN_ATTACKING -> state.battle?.step == BattleStep.ATTACK
+      ActivationTiming.AT_MAIN_PHASE_START -> turn != null && turn.phase == GamePhase.MAIN
+      ActivationTiming.AT_TURN_START -> turn != null
+      ActivationTiming.END_OF_YOUR_TURN -> turn != null && turn.phase == GamePhase.END && turn.playerId == playerId
+      ActivationTiming.END_OF_OPPONENT_TURN -> turn != null && turn.phase == GamePhase.END && turn.playerId != playerId
+      ActivationTiming.ON_PLAY, ActivationTiming.ON_KO, ActivationTiming.ON_OPPONENT_ATTACK, ActivationTiming.ON_TRIGGER, ActivationTiming.AT_GAME_START -> true
+    }
+  }
+
+  private fun payCostPreview(
+    state: GameState,
+    playerId: PlayerId,
+    cost: Cost,
+    sourceCardId: CardInstanceId,
+    evaluator: RulesEngine,
+  ): List<CardInstanceId>? {
+    return when (cost) {
+      is Cost.NoCost -> emptyList()
+      is Cost.RestSourceCost -> {
+        val card = state.cards[sourceCardId] ?: return null
+        if (card.orientation != CardOrientation.ACTIVE) return null
+        listOf(sourceCardId)
+      }
+
+      is Cost.RestDonCost -> {
+        val amount = evaluateCostAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
+        val player = state.players[playerId] ?: return null
+        val dons = player.cost.cards.filter { state.cards[it]?.orientation == CardOrientation.ACTIVE }
+        if (dons.size < amount) return null
+        dons.take(amount)
+      }
+
+      is Cost.ReturnDonCost -> {
+        val amount = evaluateCostAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
+        val player = state.players[playerId] ?: return null
+        if (player.cost.cards.size < amount) return null
+        player.cost.cards.take(amount)
+      }
+
+      is Cost.CombinedCost -> {
+        val all = mutableListOf<CardInstanceId>()
+        for (part in cost.costs) {
+          val paid = payCostPreview(state, playerId, part, sourceCardId, evaluator) ?: return null
+          all += paid
+        }
+        all
+      }
+
+      is Cost.TrashCardsCost -> emptyList() // selection requires player choice; validated elsewhere
+    }
+  }
+
+  private fun evaluateCostAmount(
+    state: GameState,
+    playerId: PlayerId,
+    sourceCardId: CardInstanceId,
+    amount: ValueExpr,
+    evaluator: RulesEngine,
+  ): Int? {
+    val ctx = EffectContext(state.id, playerId, sourceCardId, null, null)
+    return when (val result = evaluator.evaluateValue(amount, state, ctx, emptyMap())) {
+      is EvaluationResult.Failed -> null
+      is EvaluationResult.Success -> (result.value as? StoredValue.IntegerValue)?.value
+    }
+  }
+
+  private fun activateAbility(
+    state: GameState,
+    resolved: AbilityResolveResult.Ok,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    // Consume usage as soon as activation and cost payment begin
+    if (resolved.ability.usageLimit == UsageLimit.ONCE_PER_TURN) {
+      // usage is persisted by EventApplier/reducer via EFFECT_ACTIVATED side channel later;
+      // still emit activation so GameEngine can update abilityUsage deterministically.
+    }
+
+    if (resolved.costPayment.isNotEmpty()) {
+      when (resolved.ability.cost) {
+        is Cost.RestSourceCost -> {
+          for (cardId in resolved.costPayment) {
+            val card = state.cards[cardId] ?: continue
+            seq += 1
+            events += GameEvent(
+              id = EventId("${state.id.value}:$seq"),
+              sequence = seq,
+              type = GameEventType.CARD_STATE_CHANGED,
+              sourceCardId = cardId,
+              payload = GameEventPayload.CardStateChangedPayload(cardId, CardOrientation.RESTED, card.faceState),
+              visibility = EventVisibility.PUBLIC,
+            )
+          }
+        }
+
+        is Cost.RestDonCost, is Cost.CombinedCost -> {
+          val dons = resolved.costPayment.filter { id ->
+            state.players[resolved.controllerId]?.cost?.cards?.contains(id) == true
+          }
+          if (dons.isNotEmpty()) {
+            seq += 1
+            events += GameEvent(
+              id = EventId("${state.id.value}:$seq"),
+              sequence = seq,
+              type = GameEventType.DON_RESTED,
+              sourceCardId = null,
+              payload = GameEventPayload.DonRestedPayload(resolved.controllerId, dons),
+              visibility = EventVisibility.PUBLIC,
+            )
+          }
+          if (resolved.ability.cost is Cost.RestSourceCost || resolved.costPayment.any { it == resolved.cardId }) {
+            // already handled
+          }
+        }
+
+        is Cost.ReturnDonCost -> {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.DON_RETURNED,
+            sourceCardId = null,
+            payload = GameEventPayload.DonReturnedPayload(resolved.controllerId, resolved.costPayment),
+            visibility = EventVisibility.PUBLIC,
+          )
+        }
+
+        else -> Unit
+      }
+    }
+
+    seq += 1
+    val activationEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.EFFECT_ACTIVATED,
+      sourceCardId = resolved.cardId,
+      payload = GameEventPayload.EffectActivatedPayload(
+        effectId = EffectId("${state.id.value}:act:$seq"),
+        sourceCardId = resolved.cardId,
+        abilityId = resolved.ability.id,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    events += activationEvent
+
+    val request = ProgramRequest(
+      executionId = ExecutionId(activationEvent.id.value),
+      program = resolved.ability.program,
+      context = EffectContext(
+        gameId = state.id,
+        controllerId = resolved.controllerId,
+        sourceCardId = resolved.cardId,
+        abilityId = resolved.ability.id,
+        triggeringEvent = activationEvent,
+      ),
+    )
+    return GameTransition(events = events, programsToRun = listOf(request))
+  }
+
+  private fun usageKey(state: GameState, cardId: CardInstanceId, abilityId: AbilityId): AbilityUsageKey {
+    val objectId = state.cards[cardId]?.objectId ?: CardObjectId(cardId.value)
+    return AbilityUsageKey(objectId, abilityId, state.turn?.number ?: 0)
+  }
+}
 
 internal class RuleProcessor
 
