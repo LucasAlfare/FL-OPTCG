@@ -1,0 +1,107 @@
+package com.lucasalfare.opcg
+
+sealed interface GameCommand {
+  val playerId: PlayerId
+}
+
+data class PlayCardCommand(
+  override val playerId: PlayerId,
+  val cardId: CardInstanceId,
+) : GameCommand
+
+data class ActivateAbilityCommand(
+  override val playerId: PlayerId,
+  val sourceCardId: CardInstanceId,
+  val abilityId: AbilityId,
+) : GameCommand
+
+data class GiveDonCommand(
+  override val playerId: PlayerId,
+  val donId: CardInstanceId,
+  val targetId: CardInstanceId,
+) : GameCommand
+
+data class DeclareAttackCommand(
+  override val playerId: PlayerId,
+  val attackerId: CardInstanceId,
+  val targetId: BattleTarget,
+) : GameCommand
+
+data class ActivateBlockerCommand(
+  override val playerId: PlayerId,
+  val blockerId: CardInstanceId,
+) : GameCommand
+
+data class UseCharacterCounterCommand(
+  override val playerId: PlayerId,
+  val cardId: CardInstanceId,
+  val targetId: CardInstanceId,
+) : GameCommand
+
+data class UseEventCounterCommand(
+  override val playerId: PlayerId,
+  val cardId: CardInstanceId,
+) : GameCommand
+
+data class EndMainPhaseCommand(
+  override val playerId: PlayerId,
+) : GameCommand
+
+data class SubmitChoiceCommand(
+  override val playerId: PlayerId,
+  val choiceId: ChoiceId,
+  val answer: ChoiceAnswer,
+) : GameCommand
+
+data class ResolveMulliganCommand(
+  override val playerId: PlayerId,
+  val redraw: Boolean,
+) : GameCommand
+
+data class ConcedeCommand(
+  override val playerId: PlayerId,
+) : GameCommand
+
+data class DeckList(
+  val leader: CardDefinitionId,
+  val cards: List<CardDefinitionId>,
+  val donDeck: List<CardDefinitionId>,
+)
+
+data class PlayerDeck(
+  val playerId: PlayerId,
+  val deckList: DeckList,
+)
+
+data class GameFormat(
+  val id: String,
+  val leaderCount: Int,
+  val mainDeckSize: Int,
+  val donDeckSize: Int,
+  val maximumCopies: Int,
+  val enforceLeaderColors: Boolean,
+  val bannedCardNumbers: Set<String>,
+  val restrictedCardNumbers: Map<String, Int>,
+)
+
+data class DeckViolation(
+  val code: String,
+  val message: String,
+  val cardNumber: String?,
+  val expected: Int?,
+  val actual: Int?,
+)
+
+data class DeckValidationResult(
+  val valid: Boolean,
+  val violations: List<DeckViolation>,
+)
+
+data class GameSetup(
+  val gameId: GameId,
+  val players: List<PlayerDeck>,
+  val format: GameFormat,
+  val firstPlayerId: PlayerId,
+  val chooserPlayerId: PlayerId,
+  val randomState: RandomState,
+)
