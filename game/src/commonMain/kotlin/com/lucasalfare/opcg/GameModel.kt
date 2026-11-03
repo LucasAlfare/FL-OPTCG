@@ -435,3 +435,25 @@ interface CardCatalog {
   val hash: String
   fun get(id: CardDefinitionId): CardDefinition?
 }
+
+data class ZoneState(
+  val cards: List<CardInstanceId>,
+)
+
+data class PlayerState(
+  val id: PlayerId,
+  val deck: ZoneState,
+  val donDeck: ZoneState,
+  val hand: ZoneState,
+  val trash: ZoneState,
+  val leader: ZoneState,
+  val characters: ZoneState,
+  val stage: ZoneState,
+  val cost: ZoneState,
+  val life: ZoneState,
+)
+
+data class DonAttachment(
+  val hostCardId: CardInstanceId,
+  val donCardIds: List<CardInstanceId>,
+)
