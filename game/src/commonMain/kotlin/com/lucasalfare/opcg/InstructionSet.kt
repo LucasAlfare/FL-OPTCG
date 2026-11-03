@@ -98,3 +98,52 @@ data class PlayPayment(
   val restedDonIds: List<CardInstanceId>,
   val additionalCosts: List<Cost>,
 )
+
+data class SelectCards(
+  val selector: CardSelector,
+  val playerId: PlayerId,
+  val minimum: ValueExpr,
+  val maximum: ValueExpr,
+  val destination: VariableId,
+) : Instruction
+
+data class CountCards(
+  val selector: CardSelector,
+  val destination: VariableId,
+) : Instruction
+
+data class LookAtTop(
+  val playerId: PlayerId,
+  val zone: ZoneType,
+  val amount: ValueExpr,
+  val destination: VariableId,
+) : Instruction
+
+data class RevealCards(
+  val source: VariableId,
+  val viewers: Set<Viewer>,
+) : Instruction
+
+data class ChooseOption(
+  val playerId: PlayerId,
+  val options: List<OptionId>,
+  val destination: VariableId,
+) : Instruction
+
+data class ChooseNumber(
+  val playerId: PlayerId,
+  val minimum: ValueExpr,
+  val maximum: ValueExpr,
+  val destination: VariableId,
+) : Instruction
+
+data class OrderCards(
+  val source: VariableId,
+  val playerId: PlayerId,
+  val destination: VariableId,
+) : Instruction
+
+data class CheckCondition(
+  val condition: Condition,
+  val destination: VariableId,
+) : Instruction
