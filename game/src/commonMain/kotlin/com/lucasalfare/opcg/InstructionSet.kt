@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package com.lucasalfare.opcg
 
 sealed interface Instruction
@@ -308,4 +310,40 @@ data class NegateEffects(
   val source: VariableId,
   val scope: EffectScope,
   val duration: Duration,
+) : Instruction
+
+data class ApplyRestriction(
+  val source: VariableId,
+  val restriction: RuleRestriction,
+  val duration: Duration,
+) : Instruction
+
+data class GrantPermission(
+  val source: VariableId,
+  val permission: RulePermission,
+  val duration: Duration,
+) : Instruction
+
+data class AddActivationCost(
+  val selector: AbilitySelector,
+  val cost: Cost,
+  val duration: Duration,
+) : Instruction
+
+data class ModifyDeckRule(
+  val modifier: DeckRuleModifier,
+  val duration: Duration,
+) : Instruction
+
+data class RegisterReplacement(
+  val definition: ReplacementDefinition,
+) : Instruction
+
+data class ActivateAbility(
+  val selector: AbilitySelector,
+  val timing: ActivationTiming?,
+) : Instruction
+
+data class SetGameResult(
+  val result: GameResult,
 ) : Instruction
