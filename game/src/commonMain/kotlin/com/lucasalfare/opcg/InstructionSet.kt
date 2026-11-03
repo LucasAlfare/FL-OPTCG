@@ -52,3 +52,49 @@ data class CardSelector(
   val name: String? = null,
   val conditions: List<Condition> = emptyList(),
 )
+
+enum class Viewer {
+  SOURCE_CONTROLLER, OWNER, OPPONENT, ALL_PLAYERS,
+}
+
+data class ZoneDestination(
+  val playerId: PlayerId,
+  val zone: ZoneType,
+)
+
+data class CardReference(
+  val instanceId: CardInstanceId? = null,
+  val variableId: VariableId? = null,
+) {
+  init {
+    require((instanceId != null) xor (variableId != null)) {
+      "CardReference requires exactly one of instanceId or variableId"
+    }
+  }
+}
+
+data class DonSelector(
+  val zones: Set<ZoneType> = emptySet(),
+  val orientation: CardOrientation? = null,
+)
+
+enum class Placement {
+  TOP, BOTTOM, DEFAULT,
+}
+
+enum class LifePosition {
+  TOP, BOTTOM, DEFAULT,
+}
+
+data class EffectContext(
+  val gameId: GameId,
+  val controllerId: PlayerId,
+  val sourceCardId: CardInstanceId?,
+  val abilityId: AbilityId?,
+  val triggeringEvent: GameEvent?,
+)
+
+data class PlayPayment(
+  val restedDonIds: List<CardInstanceId>,
+  val additionalCosts: List<Cost>,
+)
