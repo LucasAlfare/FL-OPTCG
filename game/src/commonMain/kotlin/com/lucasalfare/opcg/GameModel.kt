@@ -152,3 +152,15 @@ sealed class ChoiceAnswer {
   data class CardOrderAnswer(val cardIds: List<CardInstanceId>) : ChoiceAnswer()
   data class BooleanAnswer(val value: Boolean) : ChoiceAnswer()
 }
+
+enum class GameEventType {
+  GAME_CREATED, SETUP_STEP_CHANGED, GAME_STARTED, PROGRAM_FRAME_CHANGED, PENDING_CHOICE_CHANGED, TURN_STARTED, PHASE_CHANGED, TURN_ENDED, CARD_PLAYED, CARDS_DRAWN, CARD_MOVED, CARD_REVEALED, CARD_STATE_CHANGED, CARD_ACTIVATED, CARD_KNOCKED_OUT, DON_ADDED, DON_RESTED, DON_ATTACHED, DON_DETACHED, DON_RETURNED, ATTACK_DECLARED, BLOCK_ACTIVATED, COUNTER_ACTIVATED, BATTLE_ENDED, DAMAGE_PROCESSED, LIFE_CHANGED, EFFECT_ACTIVATED, EFFECT_RESOLVED, EFFECT_FAILED, MODIFIER_ADDED, MODIFIER_EXPIRED, REPLACEMENT_APPLIED, DECK_SHUFFLED, CHOICE_SUBMITTED, MULLIGAN_RESOLVED, PLAYER_WON, PLAYER_LOST, GAME_DRAWN,
+}
+
+data class GameEventPattern(
+  val eventTypes: Set<GameEventType>,
+  val source: CardSelector? = null,
+  val target: CardSelector? = null,
+  val targetPlayer: PlayerRelation? = null,
+  val player: PlayerRelation? = null,
+)
