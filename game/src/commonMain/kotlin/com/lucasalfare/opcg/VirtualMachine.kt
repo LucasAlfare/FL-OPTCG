@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package com.lucasalfare.opcg
 
 enum class ProgramStatus {
@@ -162,7 +164,8 @@ class VirtualMachine(
       status = ProgramStatus.RUNNING,
       pendingChoiceId = null,
     )
-    return run(frame, state, emptyList())
+    val (stateWithFrame, frameEvents) = emitFrameChanged(state, executionId, frame)
+    return run(frame, stateWithFrame, frameEvents)
   }
 
   fun resume(
@@ -177,14 +180,28 @@ class VirtualMachine(
       return fail(frame, state, emptyList(), "CHOICE_MISMATCH", "Choice id does not match pending choice")
     }
 
+    val pending = state.pendingChoices.firstOrNull { it.id == frame.pendingChoiceId }
+    val expectedPlayer = pending?.playerId ?: frame.context.controllerId
+    if (choice.playerId != expectedPlayer) {
+      return fail(frame, state, emptyList(), "PLAYER_MISMATCH", "Player id does not match pending choice")
+    }
+    if (pending != null) {
+      val validationError = validateAnswer(pending, choice.answer, frame.instructionPointer)
+      if (validationError != null) {
+        return VmTransition.VmFailed(validationError, state, emptyList())
+      }
+    }
+
     val block = currentBlock(frame)
     if (frame.instructionPointer !in block.indices) {
       return fail(frame, state, emptyList(), "INVALID_POINTER", "Instruction pointer out of range on resume")
     }
 
+    val (stateWithoutChoice, clearEvents) = emitChoiceChanged(state, choice.choiceId, null)
+
     return when (val current = block[frame.instructionPointer]) {
-      is Optional -> resumeOptional(frame, choice, state, current)
-      else -> resumeExecutorChoice(frame, choice, state)
+      is Optional -> resumeOptional(frame, choice, stateWithoutChoice, clearEvents, current)
+      else -> resumeExecutorChoice(frame, choice, stateWithoutChoice, clearEvents, current, pending)
     }
   }
 
@@ -192,17 +209,20 @@ class VirtualMachine(
     frame: ProgramFrame,
     choice: PlayerChoice,
     state: GameState,
+    priorEvents: List<GameEvent>,
     optional: Optional,
   ): VmTransition {
     if (choice.answer !is ChoiceAnswer.BooleanAnswer) {
-      return fail(frame, state, emptyList(), "INVALID_ANSWER", "Optional requires boolean answer")
+      return fail(frame, state, priorEvents, "INVALID_ANSWER", "Optional requires boolean answer")
     }
-    val cleared = frame.copy(status = ProgramStatus.RUNNING, pendingChoiceId = null)
     val answer = choice.answer as ChoiceAnswer.BooleanAnswer
+    val cleared = frame.copy(status = ProgramStatus.RUNNING, pendingChoiceId = null)
+    val (stateWithFrame, frameEvents) = emitFrameChanged(state, frame.id, cleared)
+    val events = priorEvents + frameEvents
     return if (answer.value && optional.instructions.isNotEmpty()) {
-      run(enterBlock(cleared, listOf(frame.instructionPointer), frame.instructionPointer + 1), state, emptyList())
+      run(enterBlock(cleared, listOf(frame.instructionPointer), frame.instructionPointer + 1), stateWithFrame, events)
     } else {
-      run(cleared.copy(instructionPointer = frame.instructionPointer + 1), state, emptyList())
+      run(cleared.copy(instructionPointer = frame.instructionPointer + 1), stateWithFrame, events)
     }
   }
 
@@ -210,15 +230,88 @@ class VirtualMachine(
     frame: ProgramFrame,
     choice: PlayerChoice,
     state: GameState,
+    priorEvents: List<GameEvent>,
+    instruction: Instruction,
+    pending: PendingChoice?,
   ): VmTransition {
-    val variables = frame.variables + (VariableId("__choice_result") to storedFromAnswer(choice.answer))
+    val stored = storedFromAnswer(choice.answer)
+    val destination = destinationOf(instruction)
+    val variables = if (destination != null) {
+      frame.variables + (destination to stored)
+    } else {
+      frame.variables + (VariableId("__choice_result") to stored)
+    }
+    // Advance past the instruction that produced the choice — do not re-execute it
     val advanced = frame.copy(
       status = ProgramStatus.RUNNING,
       pendingChoiceId = null,
       variables = variables,
       instructionPointer = frame.instructionPointer + 1,
     )
-    return run(advanced, state, emptyList())
+    val (stateWithFrame, frameEvents) = emitFrameChanged(state, frame.id, advanced)
+    return run(advanced, stateWithFrame, priorEvents + frameEvents)
+  }
+
+  private fun validateAnswer(
+    pending: PendingChoice,
+    answer: ChoiceAnswer,
+    instructionPointer: Int,
+  ): VmError? {
+    return when (pending.type) {
+      ChoiceType.OPTION -> {
+        if (answer !is ChoiceAnswer.OptionAnswer) {
+          return VmError("INVALID_ANSWER", "Expected option answer", instructionPointer)
+        }
+        val allowed = pending.candidates.filterIsInstance<ChoiceCandidate.OptionCandidate>().map { it.optionId }
+        if (allowed.isNotEmpty() && answer.optionId !in allowed) {
+          return VmError("INVALID_OPTION", "Option not in candidates", instructionPointer)
+        }
+        null
+      }
+
+      ChoiceType.NUMBER -> {
+        if (answer !is ChoiceAnswer.NumberAnswer) {
+          return VmError("INVALID_ANSWER", "Expected number answer", instructionPointer)
+        }
+        if (answer.value < pending.minimum || answer.value > pending.maximum) {
+          return VmError("OUT_OF_RANGE", "Number outside limits", instructionPointer)
+        }
+        null
+      }
+
+      ChoiceType.CARD_SELECTION -> {
+        if (answer !is ChoiceAnswer.CardSelectionAnswer) {
+          return VmError("INVALID_ANSWER", "Expected card selection answer", instructionPointer)
+        }
+        val count = answer.cardIds.size
+        if (count < pending.minimum || count > pending.maximum) {
+          return VmError("OUT_OF_RANGE", "Selection count outside limits", instructionPointer)
+        }
+        val allowed = pending.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }.toSet()
+        if (allowed.isNotEmpty() && answer.cardIds.any { it !in allowed }) {
+          return VmError("INVALID_CARD", "Card not in candidates", instructionPointer)
+        }
+        null
+      }
+
+      ChoiceType.CARD_ORDER -> {
+        if (answer !is ChoiceAnswer.CardOrderAnswer) {
+          return VmError("INVALID_ANSWER", "Expected card order answer", instructionPointer)
+        }
+        val allowed = pending.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }
+        if (allowed.isNotEmpty() && answer.cardIds.toSet() != allowed.toSet()) {
+          return VmError("INVALID_ORDER", "Order must contain exactly the candidate cards", instructionPointer)
+        }
+        null
+      }
+
+      ChoiceType.BOOLEAN -> {
+        if (answer !is ChoiceAnswer.BooleanAnswer) {
+          return VmError("INVALID_ANSWER", "Expected boolean answer", instructionPointer)
+        }
+        null
+      }
+    }
   }
 
   private fun storedFromAnswer(answer: ChoiceAnswer): StoredValue = when (answer) {
@@ -227,6 +320,17 @@ class VirtualMachine(
     is ChoiceAnswer.CardSelectionAnswer -> StoredValue.CardIdsValue(answer.cardIds)
     is ChoiceAnswer.CardOrderAnswer -> StoredValue.CardIdsValue(answer.cardIds)
     is ChoiceAnswer.BooleanAnswer -> StoredValue.BooleanValue(answer.value)
+  }
+
+  private fun destinationOf(instruction: Instruction): VariableId? = when (instruction) {
+    is SelectCards -> instruction.destination
+    is CountCards -> instruction.destination
+    is LookAtTop -> instruction.destination
+    is ChooseOption -> instruction.destination
+    is ChooseNumber -> instruction.destination
+    is OrderCards -> instruction.destination
+    is CheckCondition -> instruction.destination
+    else -> null
   }
 
   private fun run(
@@ -243,7 +347,10 @@ class VirtualMachine(
 
       if (frame.instructionPointer >= block.size) {
         if (frame.callStack.isEmpty()) {
-          return VmTransition.VmCompleted(state = state, events = accumulated)
+          frame.copy(status = ProgramStatus.COMPLETED, pendingChoiceId = null)
+          val (finalState, frameEvents) = emitFrameChanged(state, frame.id, null)
+          accumulated += frameEvents
+          return VmTransition.VmCompleted(state = finalState, events = accumulated)
         }
         frame = exitBlock(frame)
         continue
@@ -262,7 +369,7 @@ class VirtualMachine(
           when (val result = evaluator.evaluateCondition(
             instruction.condition, state, frame.context, frame.variables,
           )) {
-            is EvaluationResult.Failed -> return VmTransition.VmFailed(result.error, state, accumulated)
+            is EvaluationResult.Failed -> return failAndEmit(frame, state, accumulated, result.error)
 
             is EvaluationResult.Success -> {
               val branch = if (result.value) instruction.ifTrue else instruction.ifFalse
@@ -292,12 +399,19 @@ class VirtualMachine(
             candidates = emptyList(),
             visibility = EventVisibility.PRIVATE_TO_PLAYER(frame.context.controllerId),
           )
-          return VmTransition.VmSuspended(
-            frame = frame.copy(status = ProgramStatus.SUSPENDED, pendingChoiceId = choiceId),
-            choice = choice,
-            state = state,
-            events = accumulated,
-          )
+          val suspended = frame.copy(status = ProgramStatus.SUSPENDED, pendingChoiceId = choiceId)
+          var nextState = state
+          val extra = mutableListOf<GameEvent>()
+          emitFrameChanged(nextState, frame.id, suspended).let { (s, e) ->
+            nextState = s
+            extra += e
+          }
+          emitChoiceChanged(nextState, choiceId, choice).let { (s, e) ->
+            nextState = s
+            extra += e
+          }
+          accumulated += extra
+          return VmTransition.VmSuspended(suspended, choice, nextState, accumulated)
         }
 
         is ForEach -> {
@@ -336,7 +450,7 @@ class VirtualMachine(
           when (val result = evaluator.evaluateCondition(
             instruction.condition, state, frame.context, frame.variables,
           )) {
-            is EvaluationResult.Failed -> return VmTransition.VmFailed(result.error, state, accumulated)
+            is EvaluationResult.Failed -> return failAndEmit(frame, state, accumulated, result.error)
 
             is EvaluationResult.Success -> {
               frame = if (result.value && instruction.instructions.isNotEmpty()) {
@@ -350,27 +464,38 @@ class VirtualMachine(
 
         else -> {
           when (val result = executor.execute(instruction, state, frame.context, frame.variables)) {
-            is InstructionExecutionResult.Failed -> return VmTransition.VmFailed(result.error, state, accumulated)
+            is InstructionExecutionResult.Failed -> return failAndEmit(frame, state, accumulated, result.error)
 
-            is InstructionExecutionResult.Suspended -> return VmTransition.VmSuspended(
-              frame = frame.copy(
+            is InstructionExecutionResult.Suspended -> {
+              val choice = result.choice.copy(frameId = frame.id)
+              val suspended = frame.copy(
                 status = ProgramStatus.SUSPENDED,
-                pendingChoiceId = result.choice.id,
-              ),
-              choice = result.choice,
-              state = state,
-              events = accumulated,
-            )
+                pendingChoiceId = choice.id,
+              )
+              var nextState = state
+              val extra = mutableListOf<GameEvent>()
+              emitFrameChanged(nextState, frame.id, suspended).let { (s, e) ->
+                nextState = s
+                extra += e
+              }
+              emitChoiceChanged(nextState, choice.id, choice).let { (s, e) ->
+                nextState = s
+                extra += e
+              }
+              accumulated += extra
+              return VmTransition.VmSuspended(suspended, choice, nextState, accumulated)
+            }
 
             is InstructionExecutionResult.Completed -> {
               if (result.events.isNotEmpty()) {
                 state = eventApplier.apply(state, result.events)
                 accumulated += result.events
               }
-              val variables = if (result.value != null) {
-                frame.variables + (VariableId("__last") to result.value)
-              } else {
-                frame.variables
+              val destination = destinationOf(instruction)
+              val variables = when {
+                destination != null && result.value != null -> frame.variables + (destination to result.value)
+                result.value != null -> frame.variables + (VariableId("__last") to result.value)
+                else -> frame.variables
               }
               frame = frame.copy(
                 instructionPointer = frame.instructionPointer + 1,
@@ -381,6 +506,54 @@ class VirtualMachine(
         }
       }
     }
+  }
+
+  private fun failAndEmit(
+    frame: ProgramFrame,
+    state: GameState,
+    events: List<GameEvent>,
+    error: VmError,
+  ): VmTransition.VmFailed {
+    val failed = frame.copy(status = ProgramStatus.FAILED)
+    val (nextState, frameEvents) = emitFrameChanged(state, frame.id, failed)
+    return VmTransition.VmFailed(error, nextState, events + frameEvents)
+  }
+
+  private fun emitFrameChanged(
+    state: GameState,
+    executionId: ExecutionId,
+    frame: ProgramFrame?,
+  ): Pair<GameState, List<GameEvent>> {
+    val sequence = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$sequence"),
+      sequence = sequence,
+      type = GameEventType.PROGRAM_FRAME_CHANGED,
+      sourceCardId = frame?.context?.sourceCardId,
+      payload = GameEventPayload.ProgramFrameChangedPayload(executionId, frame),
+      visibility = EventVisibility.INTERNAL,
+    )
+    val nextState = eventApplier.apply(state, listOf(event))
+    return nextState to listOf(event)
+  }
+
+  private fun emitChoiceChanged(
+    state: GameState,
+    choiceId: ChoiceId,
+    choice: PendingChoice?,
+  ): Pair<GameState, List<GameEvent>> {
+    val sequence = state.lastEventSequence + 1
+    val visibility = choice?.visibility ?: EventVisibility.INTERNAL
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$sequence"),
+      sequence = sequence,
+      type = GameEventType.PENDING_CHOICE_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.PendingChoiceChangedPayload(choiceId, choice),
+      visibility = visibility,
+    )
+    val nextState = eventApplier.apply(state, listOf(event))
+    return nextState to listOf(event)
   }
 
   private fun currentBlock(frame: ProgramFrame): List<Instruction> {
