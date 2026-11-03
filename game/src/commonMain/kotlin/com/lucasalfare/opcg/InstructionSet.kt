@@ -147,3 +147,54 @@ data class CheckCondition(
   val condition: Condition,
   val destination: VariableId,
 ) : Instruction
+
+data class Draw(
+  val playerId: PlayerId,
+  val amount: ValueExpr,
+) : Instruction
+
+data class MoveCards(
+  val source: VariableId,
+  val destination: ZoneDestination,
+  val placement: Placement,
+) : Instruction
+
+data class TrashFromHand(
+  val playerId: PlayerId,
+  val selector: CardSelector,
+  val amount: ValueExpr,
+) : Instruction
+
+data class KnockOut(
+  val source: VariableId,
+  val effectId: EffectId?,
+) : Instruction
+
+data class PlayCard(
+  val cardId: CardInstanceId,
+  val playerId: PlayerId,
+  val payment: PlayPayment,
+) : Instruction
+
+data class ShuffleZone(
+  val playerId: PlayerId,
+  val zone: ZoneType,
+) : Instruction
+
+data class DealDamage(
+  val playerId: PlayerId,
+  val amount: ValueExpr,
+  val effectId: EffectId?,
+) : Instruction
+
+data class SetLife(
+  val playerId: PlayerId,
+  val source: VariableId,
+  val position: LifePosition,
+) : Instruction
+
+data class PreventDamage(
+  val playerId: PlayerId,
+  val amount: ValueExpr,
+  val duration: Duration,
+) : Instruction
