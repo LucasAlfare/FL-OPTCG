@@ -6,3 +6,7 @@ kotlin {
   jvmToolchain(25)
   jvm()
 }
+
+dependencies {
+  commonMainImplementation("com.github.LucasAlfare:FL-Turns:1.0.0")
+}
