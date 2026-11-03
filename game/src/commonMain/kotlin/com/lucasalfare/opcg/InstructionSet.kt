@@ -245,3 +245,67 @@ data class ChangeControl(
   val playerId: PlayerId,
   val duration: Duration,
 ) : Instruction
+
+data class ModifyCharacteristic(
+  val source: VariableId,
+  val characteristic: NumericCharacteristic,
+  val operation: NumericOperation,
+  val value: ValueExpr,
+  val duration: Duration,
+) : Instruction
+
+data class SetBaseCharacteristic(
+  val source: VariableId,
+  val characteristic: NumericCharacteristic,
+  val value: ValueExpr,
+  val duration: Duration,
+) : Instruction
+
+data class SetPowerToZero(
+  val source: VariableId,
+  val duration: Duration,
+) : Instruction
+
+data class SetCardProperty(
+  val source: VariableId,
+  val property: CardProperty,
+  val value: PropertyValue,
+  val duration: Duration,
+) : Instruction
+
+data class CopyCardProperties(
+  val source: VariableId,
+  val reference: CardReference,
+  val properties: Set<CardProperty>,
+  val duration: Duration,
+) : Instruction
+
+data class GrantKeyword(
+  val source: VariableId,
+  val keyword: KeywordEffect,
+  val duration: Duration,
+) : Instruction
+
+data class RemoveKeyword(
+  val source: VariableId,
+  val keyword: KeywordEffect,
+  val duration: Duration,
+) : Instruction
+
+data class GrantAbility(
+  val source: VariableId,
+  val ability: AbilityDefinition,
+  val duration: Duration,
+) : Instruction
+
+data class CopyAbilities(
+  val source: VariableId,
+  val reference: CardReference,
+  val duration: Duration,
+) : Instruction
+
+data class NegateEffects(
+  val source: VariableId,
+  val scope: EffectScope,
+  val duration: Duration,
+) : Instruction
