@@ -198,3 +198,50 @@ data class PreventDamage(
   val amount: ValueExpr,
   val duration: Duration,
 ) : Instruction
+
+data class AddDon(
+  val playerId: PlayerId,
+  val amount: ValueExpr,
+) : Instruction
+
+data class RestDon(
+  val playerId: PlayerId,
+  val selector: DonSelector,
+  val amount: ValueExpr,
+) : Instruction
+
+data class SetDonActive(
+  val source: VariableId,
+) : Instruction
+
+data class AttachDon(
+  val cardId: CardInstanceId,
+  val source: VariableId,
+) : Instruction
+
+data class ReturnDon(
+  val playerId: PlayerId,
+  val selector: DonSelector,
+  val amount: ValueExpr,
+) : Instruction
+
+data class DetachDon(
+  val cardId: CardInstanceId,
+  val amount: ValueExpr,
+  val destination: ZoneDestination,
+) : Instruction
+
+data class RestCards(
+  val source: VariableId,
+) : Instruction
+
+data class SetCardState(
+  val source: VariableId,
+  val orientation: CardOrientation,
+) : Instruction
+
+data class ChangeControl(
+  val source: VariableId,
+  val playerId: PlayerId,
+  val duration: Duration,
+) : Instruction
