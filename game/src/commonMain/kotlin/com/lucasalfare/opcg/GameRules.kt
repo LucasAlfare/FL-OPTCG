@@ -39,13 +39,32 @@ class RulesEngine(
   private val loopProcessor = LoopProcessor()
   private val deckValidator = DeckValidator(cardCatalog)
   private val gameFactory = GameFactory(cardCatalog)
+  private val zoneInstructionExecutor = ZoneInstructionExecutor()
+  private val donInstructionExecutor = DonInstructionExecutor()
 
   fun validate(state: GameState, command: GameCommand): ValidationResult {
-    throw UnsupportedOperationException("Not implemented")
+    return when (command) {
+      is PlayCardCommand -> mainPhaseController.validatePlayCard(state, command, cardCatalog, continuousEffectProcessor)
+      is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
+      is EndMainPhaseCommand -> mainPhaseController.validateEndMain(state, command)
+      else -> ValidationResult(true, emptyList())
+    }
   }
 
   fun process(state: GameState, command: GameCommand): GameTransition {
-    throw UnsupportedOperationException("Not implemented")
+    val validation = validate(state, command)
+    if (!validation.valid) {
+      return GameTransition(events = emptyList(), programsToRun = emptyList())
+    }
+    return when (command) {
+      is PlayCardCommand -> mainPhaseController.processPlayCard(
+        state, command, cardCatalog, continuousEffectProcessor, costProcessor, this
+      )
+
+      is GiveDonCommand -> mainPhaseController.processGiveDon(state, command, continuousEffectProcessor)
+      is EndMainPhaseCommand -> turnController.endMainPhase(state, command.playerId)
+      else -> GameTransition(events = emptyList(), programsToRun = emptyList())
+    }
   }
 
   fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
@@ -54,6 +73,14 @@ class RulesEngine(
 
   fun processAutomaticRules(state: GameState): GameTransition {
     throw UnsupportedOperationException("Not implemented")
+  }
+
+  fun advancePhase(state: GameState): GameTransition {
+    return turnController.advancePhase(state, continuousEffectProcessor, this)
+  }
+
+  fun startTurn(state: GameState, playerId: PlayerId, turnNumber: Int): GameTransition {
+    return turnController.startTurn(state, playerId, turnNumber, continuousEffectProcessor, this)
   }
 
   fun createInitialState(setup: GameSetup): GameCreationResult {
@@ -338,6 +365,23 @@ class RulesEngine(
         ).copy(id = instruction.definition.id, sourceAbilityId = context.abilityId)
         InstructionExecutionResult.Completed(null, listOf(modifierAddedEvent(state, effect, seq)))
       }
+
+      is Draw -> zoneInstructionExecutor.draw(state, instruction, context, variables, this)
+      is MoveCards -> zoneInstructionExecutor.moveCards(state, instruction, context, variables, this)
+      is TrashFromHand -> zoneInstructionExecutor.trashFromHand(state, instruction, context, variables, this)
+      is PlayCard -> zoneInstructionExecutor.playCard(
+        state, instruction, context, variables, cardCatalog, continuousEffectProcessor, costProcessor, this
+      )
+
+      is ShuffleZone -> zoneInstructionExecutor.shuffleZone(state, instruction)
+      is AddDon -> donInstructionExecutor.addDon(state, instruction, context, variables, this)
+      is RestDon -> donInstructionExecutor.restDon(state, instruction, context, variables, this)
+      is SetDonActive -> donInstructionExecutor.setDonActive(state, instruction, context, variables)
+      is AttachDon -> donInstructionExecutor.attachDon(state, instruction, context, variables)
+      is ReturnDon -> donInstructionExecutor.returnDon(state, instruction, context, variables, this)
+      is DetachDon -> donInstructionExecutor.detachDon(state, instruction, context, variables, this)
+      is RestCards -> zoneInstructionExecutor.restCards(state, instruction, context, variables)
+      is SetCardState -> zoneInstructionExecutor.setCardState(state, instruction, context, variables)
 
       else -> failExec("UNSUPPORTED_INSTRUCTION", "Instruction not handled: ${instruction::class.simpleName}", 0)
     }
@@ -1385,15 +1429,1182 @@ internal class GameFactory(
   }
 }
 
-internal class TurnController
 
-internal class MainPhaseController
+internal object RandomSupport {
+  fun fisherYates(
+    list: MutableList<CardInstanceId>,
+    start: RandomState,
+  ): Pair<List<CardInstanceId>, RandomState> {
+    var state = start
+    for (i in list.lastIndex downTo 1) {
+      val (j, next) = nextBounded(state, i + 1)
+      state = next
+      val tmp = list[i]
+      list[i] = list[j]
+      list[j] = tmp
+    }
+    return list.toList() to state
+  }
+
+  fun nextBounded(state: RandomState, bound: Int): Pair<Int, RandomState> {
+    require(bound > 0)
+    if (bound == 1) {
+      val (_, next) = nextULong(state)
+      return 0 to next
+    }
+    val limit = (ULong.MAX_VALUE / bound.toULong()) * bound.toULong()
+    var current = state
+    while (true) {
+      val (value, next) = nextULong(current)
+      current = next
+      if (value < limit) {
+        return (value % bound.toULong()).toInt() to current
+      }
+    }
+  }
+
+  fun nextULong(state: RandomState): Pair<ULong, RandomState> {
+    val newState = state.state + 0x9E3779B97F4A7C15uL
+    var z = newState
+    z = (z xor (z shr 30)) * 0xBF58476D1CE4E5B9uL
+    z = (z xor (z shr 27)) * 0x94D049BB133111EBuL
+    val result = z xor (z shr 31)
+    val next = state.copy(state = newState, drawCount = state.drawCount + 1)
+    return result to next
+  }
+}
+
+internal class TurnController {
+
+  fun startTurn(
+    state: GameState,
+    playerId: PlayerId,
+    turnNumber: Int,
+    continuous: ContinuousEffectProcessor,
+    evaluator: ProgramEvaluator,
+  ): GameTransition {
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.TURN_STARTED,
+      sourceCardId = null,
+      payload = GameEventPayload.TurnStartedPayload(turnNumber, playerId),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    val refresh = runRefresh(state, playerId, turnNumber, seq, continuous)
+    events += refresh.events
+    seq = refresh.lastSequence
+
+    phaseChanged(state, playerId, null, GamePhase.REFRESH, seq)
+    // REFRESH already conceptually active; emit REFRESH then DRAW progression inside helpers
+
+    val draw = runDraw(state, playerId, turnNumber, seq)
+    events += draw.events
+    seq = draw.lastSequence
+
+    val don = runDon(state, playerId, turnNumber, seq)
+    events += don.events
+    seq = don.lastSequence
+
+    val mainStart = phaseChanged(state, playerId, GamePhase.DON, GamePhase.MAIN, seq)
+    events += mainStart.events
+    seq = mainStart.lastSequence
+
+    return GameTransition(events = events, programsToRun = emptyList())
+  }
+
+  fun advancePhase(
+    state: GameState,
+    continuous: ContinuousEffectProcessor,
+    evaluator: ProgramEvaluator,
+  ): GameTransition {
+    val turn = state.turn ?: return GameTransition(emptyList(), emptyList())
+    return when (turn.phase) {
+      GamePhase.REFRESH -> {
+        val seq = state.lastEventSequence
+        val draw = runDraw(state, turn.playerId, turn.number, seq)
+        GameTransition(draw.events, emptyList())
+      }
+
+      GamePhase.DRAW -> {
+        val seq = state.lastEventSequence
+        val don = runDon(state, turn.playerId, turn.number, seq)
+        GameTransition(don.events, emptyList())
+      }
+
+      GamePhase.DON -> {
+        val result = phaseChanged(state, turn.playerId, GamePhase.DON, GamePhase.MAIN, state.lastEventSequence)
+        GameTransition(result.events, emptyList())
+      }
+
+      GamePhase.MAIN -> endMainPhase(state, turn.playerId)
+      GamePhase.END -> finishEndPhase(state, turn.playerId, continuous)
+    }
+  }
+
+  fun endMainPhase(state: GameState, playerId: PlayerId): GameTransition {
+    val turn = state.turn ?: return GameTransition(emptyList(), emptyList())
+    if (turn.playerId != playerId || turn.phase != GamePhase.MAIN) {
+      return GameTransition(emptyList(), emptyList())
+    }
+    val result = phaseChanged(state, playerId, GamePhase.MAIN, GamePhase.END, state.lastEventSequence)
+    return GameTransition(result.events, emptyList())
+  }
+
+  fun finishEndPhase(
+    state: GameState,
+    playerId: PlayerId,
+    continuous: ContinuousEffectProcessor,
+  ): GameTransition {
+    val turn = state.turn ?: return GameTransition(emptyList(), emptyList())
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    val expired = continuous.effectsToExpire(
+      state,
+      listOf(
+        GameEvent(
+          id = EventId("preview"),
+          sequence = 0,
+          type = GameEventType.TURN_ENDED,
+          sourceCardId = null,
+          payload = GameEventPayload.TurnEndedPayload(turn.number, playerId),
+          visibility = EventVisibility.PUBLIC,
+        ),
+      ),
+    )
+    for (effect in expired) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.MODIFIER_EXPIRED,
+        sourceCardId = effect.sourceCardId,
+        payload = GameEventPayload.ModifierExpiredPayload(effect.id),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.TURN_ENDED,
+      sourceCardId = null,
+      payload = GameEventPayload.TurnEndedPayload(turn.number, playerId),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    val nextPlayer = state.playerOrder.first { it != playerId }
+    val nextTurnNumber = turn.number + 1
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.TURN_STARTED,
+      sourceCardId = null,
+      payload = GameEventPayload.TurnStartedPayload(nextTurnNumber, nextPlayer),
+      visibility = EventVisibility.PUBLIC,
+    )
+
+    return GameTransition(events, emptyList())
+  }
+
+  private data class PhaseResult(val events: List<GameEvent>, val lastSequence: Long)
+
+  private fun phaseChanged(
+    state: GameState,
+    playerId: PlayerId,
+    previous: GamePhase?,
+    next: GamePhase,
+    seqStart: Long,
+  ): PhaseResult {
+    val seq = seqStart + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.PHASE_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.PhaseChangedPayload(
+        playerId = playerId,
+        previousPhase = previous ?: next,
+        newPhase = next,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return PhaseResult(listOf(event), seq)
+  }
+
+  private fun runRefresh(
+    state: GameState,
+    playerId: PlayerId,
+    turnNumber: Int,
+    seqStart: Long,
+    continuous: ContinuousEffectProcessor,
+  ): PhaseResult {
+    val events = mutableListOf<GameEvent>()
+    var seq = seqStart
+    val phase = phaseChanged(state, playerId, null, GamePhase.REFRESH, seq)
+    events += phase.events
+    seq = phase.lastSequence
+
+    val player = state.players[playerId] ?: return PhaseResult(events, seq)
+
+    // Return attached DON!! from leader/characters controlled by turn player to Cost rested
+    for (attachment in state.donAttachments) {
+      val host = state.cards[attachment.hostCardId] ?: continue
+      val controller = continuous.effectiveController(state, host.id) ?: host.controllerId
+      if (controller != playerId) continue
+      if (host.id !in player.leader.cards && host.id !in player.characters.cards) continue
+      for (donId in attachment.donCardIds) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.DON_DETACHED,
+          sourceCardId = null,
+          payload = GameEventPayload.DonDetachedPayload(
+            hostCardId = host.id,
+            donCardIds = listOf(donId),
+            destinationPlayerId = playerId,
+            destinationZone = ZoneType.COST,
+            destinationIndex = null,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.DON_RETURNED,
+          sourceCardId = null,
+          payload = GameEventPayload.DonReturnedPayload(playerId, listOf(donId)),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_STATE_CHANGED,
+          sourceCardId = donId,
+          payload = GameEventPayload.CardStateChangedPayload(donId, CardOrientation.RESTED, FaceState.FACE_UP),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
+    }
+
+    // Activate rested cards in Leader, Character, Stage, Cost
+    val zonesToActivate = listOf(player.leader.cards, player.characters.cards, player.stage.cards, player.cost.cards)
+    for (zoneCards in zonesToActivate) {
+      for (cardId in zoneCards) {
+        val card = state.cards[cardId] ?: continue
+        if (card.orientation == CardOrientation.RESTED) {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.CARD_STATE_CHANGED,
+            sourceCardId = cardId,
+            payload = GameEventPayload.CardStateChangedPayload(cardId, CardOrientation.ACTIVE, card.faceState),
+            visibility = EventVisibility.PUBLIC,
+          )
+        }
+      }
+    }
+
+    return PhaseResult(events, seq)
+  }
+
+  private fun runDraw(
+    state: GameState,
+    playerId: PlayerId,
+    turnNumber: Int,
+    seqStart: Long,
+  ): PhaseResult {
+    val events = mutableListOf<GameEvent>()
+    var seq = seqStart
+    val phase = phaseChanged(state, playerId, GamePhase.REFRESH, GamePhase.DRAW, seq)
+    events += phase.events
+    seq = phase.lastSequence
+
+    val skipDraw = turnNumber == 1 && playerId == state.firstPlayerId
+    if (!skipDraw) {
+      val player = state.players[playerId]
+      val top = player?.deck?.cards?.firstOrNull()
+      if (top != null) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = top,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = top,
+            fromPlayerId = playerId,
+            fromZone = ZoneType.DECK,
+            toPlayerId = playerId,
+            toZone = ZoneType.HAND,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARDS_DRAWN,
+          sourceCardId = null,
+          payload = GameEventPayload.CardsDrawnPayload(playerId, listOf(top)),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
+        )
+      }
+    }
+    return PhaseResult(events, seq)
+  }
+
+  private fun runDon(
+    state: GameState,
+    playerId: PlayerId,
+    turnNumber: Int,
+    seqStart: Long,
+  ): PhaseResult {
+    val events = mutableListOf<GameEvent>()
+    var seq = seqStart
+    val phase = phaseChanged(state, playerId, GamePhase.DRAW, GamePhase.DON, seq)
+    events += phase.events
+    seq = phase.lastSequence
+
+    val player = state.players[playerId] ?: return PhaseResult(events, seq)
+    val available = player.donDeck.cards.size
+    val requested = when {
+      turnNumber == 1 && playerId == state.firstPlayerId -> 1
+      else -> 2
+    }
+    val amount = minOf(requested, available)
+    if (amount > 0) {
+      val moved = player.donDeck.cards.take(amount)
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DON_ADDED,
+        sourceCardId = null,
+        payload = GameEventPayload.DonAddedPayload(playerId, moved),
+        visibility = EventVisibility.PUBLIC,
+      )
+      for (donId in moved) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = donId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = donId,
+            fromPlayerId = playerId,
+            fromZone = ZoneType.DON_DECK,
+            toPlayerId = playerId,
+            toZone = ZoneType.COST,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.ACTIVE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
+    }
+    return PhaseResult(events, seq)
+  }
+}
+
+internal class MainPhaseController {
+
+  fun validatePlayCard(
+    state: GameState,
+    command: PlayCardCommand,
+    catalog: CardCatalog,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val violations = mutableListOf<RuleViolation>()
+    val turn = state.turn
+    if (turn == null || turn.phase != GamePhase.MAIN || turn.playerId != command.playerId) {
+      violations += RuleViolation("NOT_MAIN_PHASE", "Play card only during your Main Phase")
+    }
+    val card = state.cards[command.cardId]
+    if (card == null) {
+      violations += RuleViolation("UNKNOWN_CARD", "Card not found")
+      return ValidationResult(false, violations)
+    }
+    if (card.ownerId != command.playerId) {
+      violations += RuleViolation("NOT_OWNER", "Player does not own the card")
+    }
+    val player = state.players[command.playerId]
+    if (player == null || command.cardId !in player.hand.cards) {
+      violations += RuleViolation("NOT_IN_HAND", "Card is not in hand")
+    }
+    val def = catalog.get(card.definitionId)
+    if (def == null) {
+      violations += RuleViolation("UNKNOWN_DEFINITION", "Card definition missing")
+    } else if (def.category == CardCategory.LEADER) {
+      violations += RuleViolation("CANNOT_PLAY_LEADER", "Leader cannot be played during the game")
+    } else if (def.category !in setOf(CardCategory.CHARACTER, CardCategory.EVENT, CardCategory.STAGE)) {
+      violations += RuleViolation("INVALID_CATEGORY", "Card category cannot be played")
+    }
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  fun processPlayCard(
+    state: GameState,
+    command: PlayCardCommand,
+    catalog: CardCatalog,
+    continuous: ContinuousEffectProcessor,
+    costProcessor: CostProcessor,
+    evaluator: RulesEngine,
+  ): GameTransition {
+    val card = state.cards[command.cardId] ?: return GameTransition(emptyList(), emptyList())
+    val def = catalog.get(card.definitionId) ?: return GameTransition(emptyList(), emptyList())
+    val effectiveCost = costProcessor.effectiveCost(state, command.cardId, continuous, catalog)
+    val payment = costProcessor.selectActiveDon(state, command.playerId, effectiveCost)
+    if (payment.size < effectiveCost) {
+      return GameTransition(emptyList(), emptyList())
+    }
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    if (payment.isNotEmpty()) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DON_RESTED,
+        sourceCardId = null,
+        payload = GameEventPayload.DonRestedPayload(command.playerId, payment),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    when (def.category) {
+      CardCategory.CHARACTER -> {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = command.cardId,
+            fromPlayerId = command.playerId,
+            fromZone = ZoneType.HAND,
+            toPlayerId = command.playerId,
+            toZone = ZoneType.CHARACTER,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.ACTIVE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_PLAYED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardPlayedPayload(
+            cardId = command.cardId,
+            playerId = command.playerId,
+            fromZone = ZoneType.HAND,
+            toZone = ZoneType.CHARACTER,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        return GameTransition(events, emptyList())
+      }
+
+      CardCategory.STAGE -> {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = command.cardId,
+            fromPlayerId = command.playerId,
+            fromZone = ZoneType.HAND,
+            toPlayerId = command.playerId,
+            toZone = ZoneType.STAGE,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.ACTIVE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_PLAYED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardPlayedPayload(
+            cardId = command.cardId,
+            playerId = command.playerId,
+            fromZone = ZoneType.HAND,
+            toZone = ZoneType.STAGE,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        return GameTransition(events, emptyList())
+      }
+
+      CardCategory.EVENT -> {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_REVEALED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardRevealedPayload(
+            cardIds = listOf(command.cardId),
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = command.cardId,
+            fromPlayerId = command.playerId,
+            fromZone = ZoneType.HAND,
+            toPlayerId = command.playerId,
+            toZone = ZoneType.TRASH,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_ACTIVATED,
+          sourceCardId = command.cardId,
+          payload = GameEventPayload.CardActivatedPayload(command.cardId, command.playerId),
+          visibility = EventVisibility.PUBLIC,
+        )
+        val programs = def.abilities.filterIsInstance<ActivatedAbilityDefinition>().map { ability ->
+          val activationSeq = seq
+          ProgramRequest(
+            executionId = ExecutionId("${state.id.value}:event:$activationSeq:${ability.id.value}"),
+            program = ability.program,
+            context = EffectContext(
+              gameId = state.id,
+              controllerId = command.playerId,
+              sourceCardId = command.cardId,
+              abilityId = ability.id,
+              triggeringEvent = events.last(),
+            ),
+          )
+        }
+        return GameTransition(events, programs)
+      }
+
+      else -> return GameTransition(emptyList(), emptyList())
+    }
+  }
+
+  fun validateGiveDon(
+    state: GameState,
+    command: GiveDonCommand,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val violations = mutableListOf<RuleViolation>()
+    val turn = state.turn
+    if (turn == null || turn.phase != GamePhase.MAIN || turn.playerId != command.playerId) {
+      violations += RuleViolation("NOT_MAIN_PHASE", "Give DON only during your Main Phase")
+    }
+    val don = state.cards[command.donId]
+    val target = state.cards[command.targetId]
+    if (don == null || target == null) {
+      violations += RuleViolation("UNKNOWN_CARD", "DON or target not found")
+      return ValidationResult(false, violations)
+    }
+    val player = state.players[command.playerId]
+    if (player == null || command.donId !in player.cost.cards) {
+      violations += RuleViolation("DON_NOT_IN_COST", "DON must be in Cost area")
+    }
+    if (don.orientation != CardOrientation.ACTIVE) {
+      violations += RuleViolation("DON_NOT_ACTIVE", "DON must be active")
+    }
+    val controller = continuous.effectiveController(state, command.targetId) ?: target.controllerId
+    if (controller != command.playerId) {
+      violations += RuleViolation("INVALID_TARGET", "Target must be controlled by the player")
+    }
+    val inField =
+      player != null && (command.targetId in player.leader.cards || command.targetId in player.characters.cards)
+    if (!inField) {
+      violations += RuleViolation("INVALID_TARGET_ZONE", "Target must be Leader or Character")
+    }
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  fun processGiveDon(
+    state: GameState,
+    command: GiveDonCommand,
+    continuous: ContinuousEffectProcessor,
+  ): GameTransition {
+    var seq = state.lastEventSequence + 1
+    val events = listOf(
+      GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DON_ATTACHED,
+        sourceCardId = command.targetId,
+        payload = GameEventPayload.DonAttachedPayload(command.targetId, listOf(command.donId)),
+        visibility = EventVisibility.PUBLIC,
+      ),
+    )
+    return GameTransition(events, emptyList())
+  }
+
+  fun validateEndMain(state: GameState, command: EndMainPhaseCommand): ValidationResult {
+    val turn = state.turn
+    val ok = turn != null && turn.phase == GamePhase.MAIN && turn.playerId == command.playerId
+    return if (ok) ValidationResult(true, emptyList())
+    else ValidationResult(false, listOf(RuleViolation("NOT_MAIN_PHASE", "Cannot end Main Phase now")))
+  }
+}
+
+internal class CostProcessor {
+
+  fun effectiveCost(
+    state: GameState,
+    cardId: CardInstanceId,
+    continuous: ContinuousEffectProcessor,
+    catalog: CardCatalog,
+  ): Int {
+    val effective = continuous.effectiveCharacteristics(state, cardId)
+    if (effective?.cost != null) return effective.cost.coerceAtLeast(0)
+    val def = state.cards[cardId]?.let { catalog.get(it.definitionId) }
+    return def?.baseCost?.coerceAtLeast(0) ?: 0
+  }
+
+  fun selectActiveDon(state: GameState, playerId: PlayerId, amount: Int): List<CardInstanceId> {
+    if (amount <= 0) return emptyList()
+    val player = state.players[playerId] ?: return emptyList()
+    return player.cost.cards.filter { id -> state.cards[id]?.orientation == CardOrientation.ACTIVE }.take(amount)
+  }
+}
+
+internal class ZoneInstructionExecutor {
+
+  fun draw(
+    state: GameState,
+    instruction: Draw,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      when (it) {
+        is StoredValue.IntegerValue -> it.value
+        else -> return fail("INVALID_VALUE", "Draw amount must be integer")
+      }
+    }.coerceAtLeast(0)
+    val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val drawn = player.deck.cards.take(amount)
+    if (drawn.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (cardId in drawn) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = cardId,
+          fromPlayerId = instruction.playerId,
+          fromZone = ZoneType.DECK,
+          toPlayerId = instruction.playerId,
+          toZone = ZoneType.HAND,
+          destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_DOWN,
+          visibility = CardVisibility.OWNER_ONLY,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.CARDS_DRAWN,
+      sourceCardId = null,
+      payload = GameEventPayload.CardsDrawnPayload(instruction.playerId, drawn),
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun moveCards(
+    state: GameState,
+    instruction: MoveCards,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val cardIds = when (val source = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> source.value
+      is StoredValue.CardValue -> listOf(source.value)
+      null -> return fail("MISSING_VARIABLE", "MoveCards source missing")
+      else -> return fail("INVALID_SOURCE", "MoveCards source must be cards")
+    }
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (cardId in cardIds) {
+      val located = locateCard(state, cardId) ?: continue
+      seq += 1
+      val orientation = defaultOrientation(instruction.destination.zone)
+      val face = defaultFace(instruction.destination.zone)
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = cardId,
+          fromPlayerId = located.first,
+          fromZone = located.second,
+          toPlayerId = instruction.destination.playerId,
+          toZone = instruction.destination.zone,
+          destinationIndex = when (instruction.placement) {
+            Placement.TOP -> 0
+            Placement.BOTTOM -> null
+            Placement.DEFAULT -> null
+          },
+          newObjectId = null,
+          orientation = orientation,
+          faceState = face,
+          visibility = if (instruction.destination.zone == ZoneType.HAND) CardVisibility.OWNER_ONLY else CardVisibility.PUBLIC,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun trashFromHand(
+    state: GameState,
+    instruction: TrashFromHand,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
+    }
+    val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val selected = player.hand.cards.take(amount)
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (cardId in selected) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = cardId,
+          fromPlayerId = instruction.playerId,
+          fromZone = ZoneType.HAND,
+          toPlayerId = instruction.playerId,
+          toZone = ZoneType.TRASH,
+          destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_UP,
+          visibility = CardVisibility.PUBLIC,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun playCard(
+    state: GameState,
+    instruction: PlayCard,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    catalog: CardCatalog,
+    continuous: ContinuousEffectProcessor,
+    costProcessor: CostProcessor,
+    engine: RulesEngine,
+  ): InstructionExecutionResult {
+    val command = PlayCardCommand(instruction.playerId, instruction.cardId)
+    val transition = MainPhaseController().processPlayCard(
+      state, command, catalog, continuous, costProcessor, engine,
+    )
+    return InstructionExecutionResult.Completed(null, transition.events)
+  }
+
+  fun shuffleZone(state: GameState, instruction: ShuffleZone): InstructionExecutionResult {
+    val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val zoneCards = when (instruction.zone) {
+      ZoneType.DECK -> player.deck.cards
+      ZoneType.DON_DECK -> player.donDeck.cards
+      ZoneType.HAND -> player.hand.cards
+      ZoneType.TRASH -> player.trash.cards
+      ZoneType.LIFE -> player.life.cards
+      else -> return fail("INVALID_ZONE", "Zone cannot be shuffled")
+    }
+    val (order, randomAfter) = RandomSupport.fisherYates(zoneCards.toMutableList(), state.randomState)
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.DECK_SHUFFLED,
+      sourceCardId = null,
+      payload = GameEventPayload.DeckShuffledPayload(
+        playerId = instruction.playerId,
+        zone = instruction.zone,
+        resultingOrder = order,
+        randomStateAfter = randomAfter,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  fun restCards(
+    state: GameState,
+    instruction: RestCards,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val cardIds = sourceCards(instruction.source, variables) ?: return fail("MISSING_VARIABLE", "Source missing")
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (cardId in cardIds) {
+      val card = state.cards[cardId] ?: continue
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_STATE_CHANGED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardStateChangedPayload(cardId, CardOrientation.RESTED, card.faceState),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun setCardState(
+    state: GameState,
+    instruction: SetCardState,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val cardIds = sourceCards(instruction.source, variables) ?: return fail("MISSING_VARIABLE", "Source missing")
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (cardId in cardIds) {
+      val card = state.cards[cardId] ?: continue
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_STATE_CHANGED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardStateChangedPayload(cardId, instruction.orientation, card.faceState),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  private fun sourceCards(source: VariableId, variables: Map<VariableId, StoredValue>): List<CardInstanceId>? {
+    return when (val value = variables[source]) {
+      is StoredValue.CardIdsValue -> value.value
+      is StoredValue.CardValue -> listOf(value.value)
+      null -> null
+      else -> emptyList()
+    }
+  }
+
+  private fun locateCard(state: GameState, cardId: CardInstanceId): Pair<PlayerId, ZoneType>? {
+    for ((playerId, player) in state.players) {
+      when {
+        cardId in player.deck.cards -> return playerId to ZoneType.DECK
+        cardId in player.donDeck.cards -> return playerId to ZoneType.DON_DECK
+        cardId in player.hand.cards -> return playerId to ZoneType.HAND
+        cardId in player.trash.cards -> return playerId to ZoneType.TRASH
+        cardId in player.leader.cards -> return playerId to ZoneType.LEADER
+        cardId in player.characters.cards -> return playerId to ZoneType.CHARACTER
+        cardId in player.stage.cards -> return playerId to ZoneType.STAGE
+        cardId in player.cost.cards -> return playerId to ZoneType.COST
+        cardId in player.life.cards -> return playerId to ZoneType.LIFE
+      }
+    }
+    if (state.donAttachments.any { cardId in it.donCardIds }) {
+      val host = state.donAttachments.first { cardId in it.donCardIds }.hostCardId
+      val owner = state.cards[host]?.ownerId
+      if (owner != null) return owner to ZoneType.ATTACHED_DON
+    }
+    return null
+  }
+
+  private fun defaultOrientation(zone: ZoneType): CardOrientation = when (zone) {
+    ZoneType.LEADER, ZoneType.CHARACTER, ZoneType.STAGE, ZoneType.COST -> CardOrientation.ACTIVE
+    else -> CardOrientation.NOT_APPLICABLE
+  }
+
+  private fun defaultFace(zone: ZoneType): FaceState = when (zone) {
+    ZoneType.DECK, ZoneType.DON_DECK, ZoneType.HAND, ZoneType.LIFE -> FaceState.FACE_DOWN
+    else -> FaceState.FACE_UP
+  }
+
+  private fun fail(code: String, message: String) = InstructionExecutionResult.Failed(VmError(code, message, 0))
+}
+
+internal class DonInstructionExecutor {
+
+  fun addDon(
+    state: GameState,
+    instruction: AddDon,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
+    }.coerceAtLeast(0)
+    val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val moved = player.donDeck.cards.take(amount)
+    if (moved.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    seq += 1
+    events += GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.DON_ADDED,
+      sourceCardId = null,
+      payload = GameEventPayload.DonAddedPayload(instruction.playerId, moved),
+      visibility = EventVisibility.PUBLIC,
+    )
+    for (donId in moved) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = donId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = donId,
+          fromPlayerId = instruction.playerId,
+          fromZone = ZoneType.DON_DECK,
+          toPlayerId = instruction.playerId,
+          toZone = ZoneType.COST,
+          destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.ACTIVE,
+          faceState = FaceState.FACE_UP,
+          visibility = CardVisibility.PUBLIC,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun restDon(
+    state: GameState,
+    instruction: RestDon,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
+    }
+    val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val candidates = player.cost.cards.filter { id ->
+      val card = state.cards[id] ?: return@filter false
+      val orientationOk =
+        instruction.selector.orientation == null || card.orientation == instruction.selector.orientation
+      orientationOk && card.orientation == CardOrientation.ACTIVE
+    }.take(amount)
+    if (candidates.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.DON_RESTED,
+      sourceCardId = null,
+      payload = GameEventPayload.DonRestedPayload(instruction.playerId, candidates),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  fun setDonActive(
+    state: GameState,
+    instruction: SetDonActive,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val cardIds = when (val value = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> value.value
+      is StoredValue.CardValue -> listOf(value.value)
+      null -> return fail("MISSING_VARIABLE", "Source missing")
+      else -> emptyList()
+    }
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (cardId in cardIds) {
+      val card = state.cards[cardId] ?: continue
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_STATE_CHANGED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardStateChangedPayload(cardId, CardOrientation.ACTIVE, card.faceState),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun attachDon(
+    state: GameState,
+    instruction: AttachDon,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    val donIds = when (val value = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> value.value
+      is StoredValue.CardValue -> listOf(value.value)
+      null -> return fail("MISSING_VARIABLE", "Source missing")
+      else -> emptyList()
+    }
+    if (donIds.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.DON_ATTACHED,
+      sourceCardId = instruction.cardId,
+      payload = GameEventPayload.DonAttachedPayload(instruction.cardId, donIds),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  fun returnDon(
+    state: GameState,
+    instruction: ReturnDon,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
+    }
+    val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val candidates = player.cost.cards.take(amount)
+    if (candidates.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.DON_RETURNED,
+      sourceCardId = null,
+      payload = GameEventPayload.DonReturnedPayload(instruction.playerId, candidates),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  fun detachDon(
+    state: GameState,
+    instruction: DetachDon,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val amountResult = evaluator.evaluateValue(instruction.amount, state, context, variables)
+    if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
+    val amount = (amountResult as EvaluationResult.Success).value.let {
+      (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
+    }
+    val attachment = state.donAttachments.firstOrNull { it.hostCardId == instruction.cardId }
+      ?: return InstructionExecutionResult.Completed(null, emptyList())
+    val donIds = attachment.donCardIds.take(amount)
+    if (donIds.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.DON_DETACHED,
+      sourceCardId = instruction.cardId,
+      payload = GameEventPayload.DonDetachedPayload(
+        hostCardId = instruction.cardId,
+        donCardIds = donIds,
+        destinationPlayerId = instruction.destination.playerId,
+        destinationZone = instruction.destination.zone,
+        destinationIndex = null,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  private fun fail(code: String, message: String) = InstructionExecutionResult.Failed(VmError(code, message, 0))
+}
 
 internal class BattleResolver
 
 internal class DamageProcessor
-
-internal class CostProcessor
 
 internal class EffectScheduler
 
