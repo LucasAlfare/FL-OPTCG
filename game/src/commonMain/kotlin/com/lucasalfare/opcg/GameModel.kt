@@ -390,3 +390,48 @@ sealed class GameEventPayload {
     val reason: GameEndReason,
   ) : GameEventPayload()
 }
+
+data class CardDefinition(
+  val id: CardDefinitionId,
+  val number: String,
+  val name: String,
+  val category: CardCategory,
+  val colors: Set<CardColor>,
+  val types: Set<String>,
+  val attributes: Set<CardAttribute>,
+  val baseCost: Int?,
+  val basePower: Int?,
+  val life: Int?,
+  val counter: Int?,
+  val keywords: Set<KeywordEffect>,
+  val abilities: List<AbilityDefinition>,
+)
+
+data class CardInstance(
+  val id: CardInstanceId,
+  val definitionId: CardDefinitionId,
+  val ownerId: PlayerId,
+  val controllerId: PlayerId,
+  val objectId: CardObjectId,
+  val orientation: CardOrientation,
+  val faceState: FaceState,
+  val visibility: CardVisibility,
+)
+
+data class EffectiveCharacteristics(
+  val name: String,
+  val colors: Set<CardColor>,
+  val types: Set<String>,
+  val attributes: Set<CardAttribute>,
+  val cost: Int?,
+  val power: Int?,
+  val life: Int?,
+  val counter: Int?,
+  val keywords: Set<KeywordEffect>,
+)
+
+interface CardCatalog {
+  val version: String
+  val hash: String
+  fun get(id: CardDefinitionId): CardDefinition?
+}
