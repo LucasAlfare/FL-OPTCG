@@ -1,3 +1,5 @@
+@file:Suppress("UnusedPrivateMember")
+
 package com.lucasalfare.opcg
 
 @JvmInline
@@ -456,4 +458,52 @@ data class PlayerState(
 data class DonAttachment(
   val hostCardId: CardInstanceId,
   val donCardIds: List<CardInstanceId>,
+)
+
+data class TurnState(
+  val number: Int,
+  val playerId: PlayerId,
+  val phase: GamePhase,
+)
+
+data class BattleState(
+  val attackerId: CardInstanceId,
+  val originalTarget: BattleTarget,
+  val currentTarget: BattleTarget,
+  val step: BattleStep,
+  val blockerUsed: Boolean,
+  val counterPower: Int,
+)
+
+data class GameResult(
+  val winnerId: PlayerId?,
+  val loserIds: Set<PlayerId>,
+  val reason: GameEndReason,
+)
+
+data class GameManifest(
+  val rulesVersion: String,
+  val cardCatalogVersion: String,
+  val cardCatalogHash: String,
+  val instructionSetVersion: String,
+  val vmVersion: String,
+  val randomAlgorithm: String,
+  val gameFormatId: String,
+)
+
+data class GameState(
+  val id: GameId,
+  val status: GameStatus,
+  val players: Map<PlayerId, PlayerState>,
+  val playerOrder: List<PlayerId>,
+  val firstPlayerId: PlayerId,
+  val chooserPlayerId: PlayerId,
+  val cards: Map<CardInstanceId, CardInstance>,
+  val donAttachments: List<DonAttachment>,
+  val turn: TurnState?,
+  val battle: BattleState?,
+  val activeEffects: List<ActiveEffect>,
+  val randomState: RandomState,
+  val lastEventSequence: Long,
+  val result: GameResult?,
 )
