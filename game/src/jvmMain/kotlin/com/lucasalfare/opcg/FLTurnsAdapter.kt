@@ -4,7 +4,7 @@ import com.lucasalfare.flturns.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 
-class FlTurnsAdapter(
+class FLTurnsAdapter(
   private val engine: GameEngine,
   private val players: List<PlayerId>,
   events: TurnEventSink = TurnEventSink {},
