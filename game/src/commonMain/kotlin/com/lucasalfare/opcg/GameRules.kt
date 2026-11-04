@@ -1,5 +1,8 @@
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class RuleViolation(
   val code: String,
   val message: String,

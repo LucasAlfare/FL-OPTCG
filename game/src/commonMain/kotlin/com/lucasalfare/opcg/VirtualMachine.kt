@@ -2,25 +2,42 @@
 
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class ProgramStatus {
   QUEUED, RUNNING, SUSPENDED, COMPLETED, FAILED,
 }
 
+@Serializable
 data class ProgramCounter(
   val programId: ProgramId,
   val blockPath: List<Int>,
   val instructionPointer: Int,
 )
 
+@Serializable
 sealed class StoredValue {
+  @Serializable
   data class IntegerValue(val value: Int) : StoredValue()
+
+  @Serializable
   data class BooleanValue(val value: Boolean) : StoredValue()
+
+  @Serializable
   data class CardIdsValue(val value: List<CardInstanceId>) : StoredValue()
+
+  @Serializable
   data class OptionValue(val value: OptionId) : StoredValue()
+
+  @Serializable
   data class PlayerValue(val value: PlayerId) : StoredValue()
+
+  @Serializable
   data class CardValue(val value: CardInstanceId) : StoredValue()
 }
 
+@Serializable
 data class ProgramFrame(
   val id: ExecutionId,
   val program: Program,
@@ -32,16 +49,24 @@ data class ProgramFrame(
   val pendingChoiceId: ChoiceId?,
 )
 
+@Serializable
 enum class ChoiceType {
   OPTION, NUMBER, CARD_SELECTION, CARD_ORDER, BOOLEAN,
 }
 
+@Serializable
 sealed class ChoiceCandidate {
+  @Serializable
   data class OptionCandidate(val optionId: OptionId) : ChoiceCandidate()
+
+  @Serializable
   data class NumberCandidate(val value: Int) : ChoiceCandidate()
+
+  @Serializable
   data class CardCandidate(val cardId: CardInstanceId) : ChoiceCandidate()
 }
 
+@Serializable
 data class PendingChoice(
   val id: ChoiceId,
   val playerId: PlayerId,
@@ -53,35 +78,45 @@ data class PendingChoice(
   val visibility: EventVisibility,
 )
 
+@Serializable
 data class PlayerChoice(
   val choiceId: ChoiceId,
   val playerId: PlayerId,
   val answer: ChoiceAnswer,
 )
 
+@Serializable
 data class VmError(
   val code: String,
   val message: String,
   val instructionPointer: Int,
 )
 
+@Serializable
 sealed class InstructionExecutionResult {
+  @Serializable
   data class Completed(
     val value: StoredValue?,
     val events: List<GameEvent>,
   ) : InstructionExecutionResult()
 
+  @Serializable
   data class Suspended(
     val choice: PendingChoice,
   ) : InstructionExecutionResult()
 
+  @Serializable
   data class Failed(
     val error: VmError,
   ) : InstructionExecutionResult()
 }
 
+@Serializable
 sealed class EvaluationResult<out T> {
+  @Serializable
   data class Success<T>(val value: T) : EvaluationResult<T>()
+
+  @Serializable
   data class Failed(val error: VmError) : EvaluationResult<Nothing>()
 }
 
@@ -116,13 +151,16 @@ interface EventApplier {
   fun apply(state: GameState, events: List<GameEvent>): GameState
 }
 
+@Serializable
 sealed class VmTransition {
+  @Serializable
   data class VmRunning(
     val frame: ProgramFrame,
     val state: GameState,
     val events: List<GameEvent>,
   ) : VmTransition()
 
+  @Serializable
   data class VmSuspended(
     val frame: ProgramFrame,
     val choice: PendingChoice,
@@ -130,11 +168,13 @@ sealed class VmTransition {
     val events: List<GameEvent>,
   ) : VmTransition()
 
+  @Serializable
   data class VmCompleted(
     val state: GameState,
     val events: List<GameEvent>,
   ) : VmTransition()
 
+  @Serializable
   data class VmFailed(
     val error: VmError,
     val state: GameState,

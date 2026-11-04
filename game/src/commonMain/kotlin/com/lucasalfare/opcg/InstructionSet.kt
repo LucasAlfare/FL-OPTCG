@@ -2,47 +2,72 @@
 
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 sealed interface Instruction
 
+@Serializable
 enum class ArithmeticOperator {
   ADD, SUBTRACT, MULTIPLY, DIVIDE, MIN, MAX,
 }
 
+@Serializable
 enum class ComparisonOperator {
   EQUAL, NOT_EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL,
 }
 
+@Serializable
 sealed class ValueExpr {
+  @Serializable
   data class NumberValue(val value: Int) : ValueExpr()
+
+  @Serializable
   data class CountValue(val selector: CardSelector) : ValueExpr()
+
+  @Serializable
   data class VariableValue(val variableId: VariableId) : ValueExpr()
+
+  @Serializable
   data class ArithmeticValue(
     val operator: ArithmeticOperator,
     val left: ValueExpr,
     val right: ValueExpr,
   ) : ValueExpr()
 
+  @Serializable
   data class CharacteristicValue(
     val selector: CardSelector,
     val characteristic: NumericCharacteristic,
   ) : ValueExpr()
 
+  @Serializable
   data class CurrentCardValue(val characteristic: NumericCharacteristic) : ValueExpr()
 }
 
+@Serializable
 sealed class Condition {
+  @Serializable
   data class Comparison(
     val left: ValueExpr,
     val operator: ComparisonOperator,
     val right: ValueExpr,
   ) : Condition()
 
+  @Serializable
   data class AllConditions(val conditions: List<Condition>) : Condition()
+
+  @Serializable
   data class AnyCondition(val conditions: List<Condition>) : Condition()
+
+  @Serializable
   data class NotCondition(val condition: Condition) : Condition()
+
+  @Serializable
   data class Exists(val selector: CardSelector) : Condition()
 }
 
+@Serializable
 data class CardSelector(
   val owner: PlayerRelation? = null,
   val controller: PlayerRelation? = null,
@@ -55,15 +80,18 @@ data class CardSelector(
   val conditions: List<Condition> = emptyList(),
 )
 
+@Serializable
 enum class Viewer {
   SOURCE_CONTROLLER, OWNER, OPPONENT, ALL_PLAYERS,
 }
 
+@Serializable
 data class ZoneDestination(
   val playerId: PlayerId,
   val zone: ZoneType,
 )
 
+@Serializable
 data class CardReference(
   val instanceId: CardInstanceId? = null,
   val variableId: VariableId? = null,
@@ -75,19 +103,23 @@ data class CardReference(
   }
 }
 
+@Serializable
 data class DonSelector(
   val zones: Set<ZoneType> = emptySet(),
   val orientation: CardOrientation? = null,
 )
 
+@Serializable
 enum class Placement {
   TOP, BOTTOM, DEFAULT,
 }
 
+@Serializable
 enum class LifePosition {
   TOP, BOTTOM, DEFAULT,
 }
 
+@Serializable
 data class EffectContext(
   val gameId: GameId,
   val controllerId: PlayerId,
@@ -96,11 +128,13 @@ data class EffectContext(
   val triggeringEvent: GameEvent?,
 )
 
+@Serializable
 data class PlayPayment(
   val restedDonIds: List<CardInstanceId>,
   val additionalCosts: List<Cost>,
 )
 
+@Serializable
 data class SelectCards(
   val selector: CardSelector,
   val playerId: PlayerId,
@@ -109,11 +143,13 @@ data class SelectCards(
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class CountCards(
   val selector: CardSelector,
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class LookAtTop(
   val playerId: PlayerId,
   val zone: ZoneType,
@@ -121,17 +157,20 @@ data class LookAtTop(
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class RevealCards(
   val source: VariableId,
   val viewers: Set<Viewer>,
 ) : Instruction
 
+@Serializable
 data class ChooseOption(
   val playerId: PlayerId,
   val options: List<OptionId>,
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class ChooseNumber(
   val playerId: PlayerId,
   val minimum: ValueExpr,
@@ -139,115 +178,136 @@ data class ChooseNumber(
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class OrderCards(
   val source: VariableId,
   val playerId: PlayerId,
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class CheckCondition(
   val condition: Condition,
   val destination: VariableId,
 ) : Instruction
 
+@Serializable
 data class Draw(
   val playerId: PlayerId,
   val amount: ValueExpr,
 ) : Instruction
 
+@Serializable
 data class MoveCards(
   val source: VariableId,
   val destination: ZoneDestination,
   val placement: Placement,
 ) : Instruction
 
+@Serializable
 data class TrashFromHand(
   val playerId: PlayerId,
   val selector: CardSelector,
   val amount: ValueExpr,
 ) : Instruction
 
+@Serializable
 data class KnockOut(
   val source: VariableId,
   val effectId: EffectId?,
 ) : Instruction
 
+@Serializable
 data class PlayCard(
   val cardId: CardInstanceId,
   val playerId: PlayerId,
   val payment: PlayPayment,
 ) : Instruction
 
+@Serializable
 data class ShuffleZone(
   val playerId: PlayerId,
   val zone: ZoneType,
 ) : Instruction
 
+@Serializable
 data class DealDamage(
   val playerId: PlayerId,
   val amount: ValueExpr,
   val effectId: EffectId?,
 ) : Instruction
 
+@Serializable
 data class SetLife(
   val playerId: PlayerId,
   val source: VariableId,
   val position: LifePosition,
 ) : Instruction
 
+@Serializable
 data class PreventDamage(
   val playerId: PlayerId,
   val amount: ValueExpr,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class AddDon(
   val playerId: PlayerId,
   val amount: ValueExpr,
 ) : Instruction
 
+@Serializable
 data class RestDon(
   val playerId: PlayerId,
   val selector: DonSelector,
   val amount: ValueExpr,
 ) : Instruction
 
+@Serializable
 data class SetDonActive(
   val source: VariableId,
 ) : Instruction
 
+@Serializable
 data class AttachDon(
   val cardId: CardInstanceId,
   val source: VariableId,
 ) : Instruction
 
+@Serializable
 data class ReturnDon(
   val playerId: PlayerId,
   val selector: DonSelector,
   val amount: ValueExpr,
 ) : Instruction
 
+@Serializable
 data class DetachDon(
   val cardId: CardInstanceId,
   val amount: ValueExpr,
   val destination: ZoneDestination,
 ) : Instruction
 
+@Serializable
 data class RestCards(
   val source: VariableId,
 ) : Instruction
 
+@Serializable
 data class SetCardState(
   val source: VariableId,
   val orientation: CardOrientation,
 ) : Instruction
 
+@Serializable
 data class ChangeControl(
   val source: VariableId,
   val playerId: PlayerId,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class ModifyCharacteristic(
   val source: VariableId,
   val characteristic: NumericCharacteristic,
@@ -256,6 +316,7 @@ data class ModifyCharacteristic(
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class SetBaseCharacteristic(
   val source: VariableId,
   val characteristic: NumericCharacteristic,
@@ -263,11 +324,13 @@ data class SetBaseCharacteristic(
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class SetPowerToZero(
   val source: VariableId,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class SetCardProperty(
   val source: VariableId,
   val property: CardProperty,
@@ -275,6 +338,7 @@ data class SetCardProperty(
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class CopyCardProperties(
   val source: VariableId,
   val reference: CardReference,
@@ -282,68 +346,80 @@ data class CopyCardProperties(
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class GrantKeyword(
   val source: VariableId,
   val keyword: KeywordEffect,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class RemoveKeyword(
   val source: VariableId,
   val keyword: KeywordEffect,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class GrantAbility(
   val source: VariableId,
   val ability: AbilityDefinition,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class CopyAbilities(
   val source: VariableId,
   val reference: CardReference,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class NegateEffects(
   val source: VariableId,
   val scope: EffectScope,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class ApplyRestriction(
   val source: VariableId,
   val restriction: RuleRestriction,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class GrantPermission(
   val source: VariableId,
   val permission: RulePermission,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class AddActivationCost(
   val selector: AbilitySelector,
   val cost: Cost,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class ModifyDeckRule(
   val modifier: DeckRuleModifier,
   val duration: Duration,
 ) : Instruction
 
+@Serializable
 data class RegisterReplacement(
   val definition: ReplacementDefinition,
 ) : Instruction
 
+@Serializable
 data class ActivateAbility(
   val selector: AbilitySelector,
   val timing: ActivationTiming?,
 ) : Instruction
 
+@Serializable
 data class SetGameResult(
   val result: GameResult,
 ) : Instruction

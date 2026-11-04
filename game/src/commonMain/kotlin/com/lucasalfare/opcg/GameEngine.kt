@@ -1,5 +1,9 @@
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
 class GameStateReducer : EventApplier {
 
   override fun apply(state: GameState, events: List<GameEvent>): GameState {
@@ -393,18 +397,21 @@ class GameStateReducer : EventApplier {
   }
 }
 
+@Serializable
 data class GameSnapshot(
   val manifest: GameManifest,
   val state: GameState,
   val lastLogEntrySequence: Long,
 )
 
+@Serializable
 data class GameLogEntry(
   val sequence: Long,
   val command: GameCommand?,
   val events: List<GameEvent>,
 )
 
+@Serializable
 data class GameLog(
   val manifest: GameManifest,
   val initialSnapshot: GameSnapshot,
@@ -533,4 +540,723 @@ class GameHistory(
     }
     return sequence
   }
+}
+
+@Serializable
+sealed class CommandResult {
+  @Serializable
+  data class Rejected(val violations: List<RuleViolation>) : CommandResult()
+
+  @Serializable
+  data class Completed(val events: List<GameEvent>, val lastEventSequence: Long) : CommandResult()
+
+  @Serializable
+  data class Suspended(val choiceId: ChoiceId, val events: List<GameEvent>) : CommandResult()
+
+  @Serializable
+  data class Failed(val error: VmError, val events: List<GameEvent>, val lastEventSequence: Long) : CommandResult()
+}
+
+data class CardView(
+  val id: CardInstanceId?,
+  val definition: CardDefinition?,
+  val controllerId: PlayerId?,
+  val orientation: CardOrientation,
+  val faceState: FaceState,
+  val characteristics: EffectiveCharacteristics?,
+  val attachedDonCount: Int,
+)
+
+data class PlayerPublicView(
+  val playerId: PlayerId,
+  val leader: CardView?,
+  val characters: List<CardView>,
+  val stage: CardView?,
+  val lifeCount: Int,
+  val trash: List<CardView>,
+  val deckCount: Int,
+  val costDon: List<CardView>,
+  val attachedDon: Map<CardInstanceId, Int>,
+)
+
+data class PlayerView(
+  val gameId: GameId,
+  val viewerId: PlayerId,
+  val status: GameStatus,
+  val turn: TurnState?,
+  val battle: BattleState?,
+  val players: List<PlayerPublicView>,
+  val ownHand: List<CardView>,
+  val opponentHandCount: Int,
+  val revealedCards: List<CardView>,
+  val publicEvents: List<GameEvent>,
+  val pendingChoice: PendingChoice?,
+)
+
+class GameEngine private constructor(
+  private var state: GameState,
+  private val manifest: GameManifest,
+  private val cardCatalog: CardCatalog,
+  private val rulesEngine: RulesEngine,
+  private val virtualMachine: VirtualMachine,
+  private val reducer: GameStateReducer,
+  private val history: GameHistory,
+) {
+
+  companion object {
+
+    fun create(
+      setup: GameSetup,
+      manifest: GameManifest,
+      cardCatalog: CardCatalog,
+      rulesEngine: RulesEngine,
+      virtualMachine: VirtualMachine,
+      reducer: GameStateReducer,
+      history: GameHistory,
+    ): GameEngine {
+      val creationResult = rulesEngine.createInitialState(setup)
+      val stateAfterInit = reducer.apply(creationResult.initialState, creationResult.initialEvents)
+
+      val initialSnapshot = GameSnapshot(
+        manifest = manifest,
+        state = stateAfterInit,
+        lastLogEntrySequence = 0L,
+      )
+      history.initialize(initialSnapshot, creationResult.initialEvents)
+
+      val engine = GameEngine(stateAfterInit, manifest, cardCatalog, rulesEngine, virtualMachine, reducer, history)
+      engine.runSetupPhase()
+      return engine
+    }
+
+    fun restore(
+      log: GameLog,
+      cardCatalog: CardCatalog,
+      rulesEngine: RulesEngine,
+      virtualMachine: VirtualMachine,
+      reducer: GameStateReducer,
+      history: GameHistory,
+    ): GameEngine {
+      val stored = log.manifest
+      require(stored.rulesVersion == log.manifest.rulesVersion) { "Rules version mismatch" }
+      require(stored.cardCatalogVersion == cardCatalog.version) { "Card catalog version mismatch" }
+      require(stored.cardCatalogHash == cardCatalog.hash) { "Card catalog hash mismatch" }
+
+      history.load(log)
+
+      val base = log.snapshots.lastOrNull() ?: log.initialSnapshot
+      val allEntries = log.entries
+      val state = history.replay(base, allEntries)
+
+      return GameEngine(state, log.manifest, cardCatalog, rulesEngine, virtualMachine, reducer, history)
+    }
+  }
+
+  fun submit(command: GameCommand): CommandResult {
+    if (state.status == GameStatus.FINISHED) {
+      return CommandResult.Rejected(listOf(RuleViolation("GAME_FINISHED", "Game is already finished")))
+    }
+
+    val setup = state.setup
+    if (setup != null) {
+      val allowed = isSetupCommand(command, setup)
+      if (!allowed) {
+        return CommandResult.Rejected(
+          listOf(
+            RuleViolation(
+              "SETUP_IN_PROGRESS", "Only setup commands are accepted during setup"
+            )
+          )
+        )
+      }
+    }
+
+    val validation = rulesEngine.validate(state, command)
+    if (!validation.valid) {
+      return CommandResult.Rejected(validation.violations)
+    }
+
+    val transactionEvents = mutableListOf<GameEvent>()
+
+    val transition = rulesEngine.process(state, command)
+    if (transition.events.isNotEmpty()) {
+      state = reducer.apply(state, transition.events)
+      transactionEvents += transition.events
+    }
+
+    if (transition.choiceToResume != null) {
+      val choice = transition.choiceToResume
+      val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }
+      if (frame != null) {
+        val vmResult = runVmResume(frame, choice, transactionEvents)
+        if (vmResult != null) return vmResult
+      }
+    }
+
+    for (request in transition.programsToRun) {
+      val vmResult = runVmStart(request, transactionEvents)
+      if (vmResult != null) return vmResult
+    }
+
+    val autoResult = drainAutomaticWork(transactionEvents)
+    if (autoResult != null) return autoResult
+
+    if (command is ResolveMulliganCommand) {
+      checkMulligansComplete(transactionEvents)
+    }
+
+    val logEntry = buildEntry(command, transactionEvents)
+    history.append(logEntry)
+
+    return if (state.pendingChoices.isNotEmpty()) {
+      val blocking = state.pendingChoices.first()
+      CommandResult.Suspended(blocking.id, transactionEvents)
+    } else {
+      CommandResult.Completed(transactionEvents, state.lastEventSequence)
+    }
+  }
+
+  fun snapshot(): GameSnapshot = history.createSnapshot(state, history.log!!.entries.lastOrNull()?.sequence ?: 0L)
+
+  fun view(playerId: PlayerId): PlayerView {
+    val opponentId = state.playerOrder.firstOrNull { it != playerId }
+    val opponentHandCount = opponentId?.let { state.players[it]?.hand?.cards?.size } ?: 0
+
+    val revealedIds = state.cards.values.filter { card ->
+      isVisibleTo(
+        card.visibility, playerId, card.ownerId
+      ) && card.faceState == FaceState.FACE_UP
+    }.map { it.id }.toSet()
+
+    val publicViews = state.playerOrder.map { pid -> buildPublicView(pid, playerId) }
+
+    val ownHand = state.players[playerId]?.hand?.cards?.map { cardId ->
+      buildCardView(cardId, playerId, authorized = true)
+    } ?: emptyList()
+
+    val revealedCards = revealedIds.filter { id -> state.players[playerId]?.hand?.cards?.contains(id) != true }
+      .map { cardId -> buildCardView(cardId, playerId, authorized = true) }
+
+    val pendingChoice = state.pendingChoices.firstOrNull { it.playerId == playerId }
+
+    val publicEvents = collectPublicEvents(playerId)
+
+    return PlayerView(
+      gameId = state.id,
+      viewerId = playerId,
+      status = state.status,
+      turn = state.turn,
+      battle = state.battle,
+      players = publicViews,
+      ownHand = ownHand,
+      opponentHandCount = opponentHandCount,
+      revealedCards = revealedCards,
+      publicEvents = publicEvents,
+      pendingChoice = pendingChoice,
+    )
+  }
+
+  private fun runSetupPhase() {
+    val setupEvents = mutableListOf<GameEvent>()
+
+    val initialEffectsResult = processInitialLeaderEffects(setupEvents)
+    if (initialEffectsResult != null) return
+
+    advanceToOpeningHand(setupEvents)
+    recordAutoEntry(setupEvents)
+  }
+
+  private fun processInitialLeaderEffects(accumulated: MutableList<GameEvent>): Unit? {
+    val chooser = state.chooserPlayerId
+    val other = state.playerOrder.firstOrNull { it != chooser } ?: return null
+
+    for (playerId in listOf(chooser, other)) {
+      val player = state.players[playerId] ?: continue
+      val leaderCardId = player.leader.cards.firstOrNull() ?: continue
+      val leaderDef = cardCatalog.get(state.cards[leaderCardId]?.definitionId ?: continue) ?: continue
+
+      for (ability in leaderDef.abilities) {
+        if (ability !is ActivatedAbilityDefinition) continue
+        if (ability.timing != ActivationTiming.AT_GAME_START) continue
+
+        val command = ActivateAbilityCommand(playerId, leaderCardId, ability.id)
+        val transition = rulesEngine.process(state, command)
+        if (transition.events.isNotEmpty()) {
+          state = reducer.apply(state, transition.events)
+          accumulated += transition.events
+        }
+        for (request in transition.programsToRun) {
+          val vmResult = runVmStart(request, accumulated)
+          if (vmResult != null) {
+            recordAutoEntry(accumulated)
+            return Unit
+          }
+        }
+        val autoResult = drainAutomaticWork(accumulated)
+        if (autoResult != null) {
+          recordAutoEntry(accumulated)
+          return Unit
+        }
+        if (state.pendingChoices.isNotEmpty()) {
+          recordAutoEntry(accumulated)
+          return Unit
+        }
+      }
+    }
+
+    return null
+  }
+
+  private fun advanceToOpeningHand(accumulated: MutableList<GameEvent>) {
+    val seq1 = state.lastEventSequence + 1
+    val openingHandEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq1"),
+      sequence = seq1,
+      type = GameEventType.SETUP_STEP_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.INITIAL_EFFECTS, GameSetupStep.OPENING_HAND),
+      visibility = EventVisibility.PUBLIC,
+    )
+    state = reducer.apply(state, listOf(openingHandEvent))
+    accumulated += openingHandEvent
+
+    for (playerId in state.playerOrder) {
+      val player = state.players[playerId] ?: continue
+      val toDraw = player.deck.cards.take(5)
+      for (cardId in toDraw) {
+        val seq = state.lastEventSequence + 1
+        val moveEvent = GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = cardId,
+            fromPlayerId = playerId,
+            fromZone = ZoneType.DECK,
+            toPlayerId = playerId,
+            toZone = ZoneType.HAND,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
+        )
+        state = reducer.apply(state, listOf(moveEvent))
+        accumulated += moveEvent
+      }
+      if (toDraw.isNotEmpty()) {
+        val seq = state.lastEventSequence + 1
+        val drawnEvent = GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARDS_DRAWN,
+          sourceCardId = null,
+          payload = GameEventPayload.CardsDrawnPayload(playerId, toDraw),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
+        )
+        state = reducer.apply(state, listOf(drawnEvent))
+        accumulated += drawnEvent
+      }
+    }
+
+    val seq2 = state.lastEventSequence + 1
+    val mulliganEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq2"),
+      sequence = seq2,
+      type = GameEventType.SETUP_STEP_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.OPENING_HAND, GameSetupStep.MULLIGAN),
+      visibility = EventVisibility.PUBLIC,
+    )
+    state = reducer.apply(state, listOf(mulliganEvent))
+    accumulated += mulliganEvent
+  }
+
+  private fun advanceToLife(accumulated: MutableList<GameEvent>) {
+    val seq1 = state.lastEventSequence + 1
+    val lifeStepEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq1"),
+      sequence = seq1,
+      type = GameEventType.SETUP_STEP_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.MULLIGAN, GameSetupStep.LIFE),
+      visibility = EventVisibility.PUBLIC,
+    )
+    state = reducer.apply(state, listOf(lifeStepEvent))
+    accumulated += lifeStepEvent
+
+    for (playerId in state.playerOrder) {
+      val player = state.players[playerId] ?: continue
+      val leaderCardId = player.leader.cards.firstOrNull() ?: continue
+      val effectiveLife = rulesEngine.effectiveCharacteristics(state, leaderCardId)?.life ?: 0
+      val toDraw = player.deck.cards.take(effectiveLife)
+      for (cardId in toDraw) {
+        val seq = state.lastEventSequence + 1
+        val moveEvent = GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = cardId,
+            fromPlayerId = playerId,
+            fromZone = ZoneType.DECK,
+            toPlayerId = playerId,
+            toZone = ZoneType.LIFE,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
+        )
+        state = reducer.apply(state, listOf(moveEvent))
+        accumulated += moveEvent
+      }
+      if (toDraw.isNotEmpty()) {
+        val seq = state.lastEventSequence + 1
+        val lifeChangedEvent = GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.LIFE_CHANGED,
+          sourceCardId = null,
+          payload = GameEventPayload.LifeChangedPayload(
+            playerId = playerId,
+            addedCardIds = toDraw,
+            removedCardIds = emptyList(),
+            destinationZone = null,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        state = reducer.apply(state, listOf(lifeChangedEvent))
+        accumulated += lifeChangedEvent
+      }
+    }
+
+    val seq2 = state.lastEventSequence + 1
+    val readyEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq2"),
+      sequence = seq2,
+      type = GameEventType.SETUP_STEP_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.LIFE, GameSetupStep.READY),
+      visibility = EventVisibility.PUBLIC,
+    )
+    state = reducer.apply(state, listOf(readyEvent))
+    accumulated += readyEvent
+
+    val seq3 = state.lastEventSequence + 1
+    val startedEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq3"),
+      sequence = seq3,
+      type = GameEventType.GAME_STARTED,
+      sourceCardId = null,
+      payload = GameEventPayload.GameStartedPayload(state.firstPlayerId),
+      visibility = EventVisibility.PUBLIC,
+    )
+    state = reducer.apply(state, listOf(startedEvent))
+    accumulated += startedEvent
+
+    val firstTurnTransition = rulesEngine.startTurn(state, state.firstPlayerId, 1)
+    if (firstTurnTransition.events.isNotEmpty()) {
+      state = reducer.apply(state, firstTurnTransition.events)
+      accumulated += firstTurnTransition.events
+    }
+  }
+
+  private fun runVmStart(
+    request: ProgramRequest,
+    accumulated: MutableList<GameEvent>,
+  ): CommandResult? {
+    val vmTransition = virtualMachine.start(request.program, request.context, state, request.executionId)
+    return applyVmTransition(vmTransition, accumulated)
+  }
+
+  private fun runVmResume(
+    frame: ProgramFrame,
+    choice: PlayerChoice,
+    accumulated: MutableList<GameEvent>,
+  ): CommandResult? {
+    val vmTransition = virtualMachine.resume(frame, choice, state)
+    return applyVmTransition(vmTransition, accumulated)
+  }
+
+  private fun applyVmTransition(
+    vmTransition: VmTransition,
+    accumulated: MutableList<GameEvent>,
+  ): CommandResult? {
+    return when (vmTransition) {
+      is VmTransition.VmRunning -> {
+        if (vmTransition.events.isNotEmpty()) {
+          state = reducer.apply(state, vmTransition.events)
+          accumulated += vmTransition.events
+        }
+        null
+      }
+
+      is VmTransition.VmCompleted -> {
+        if (vmTransition.events.isNotEmpty()) {
+          state = reducer.apply(state, vmTransition.events)
+          accumulated += vmTransition.events
+        }
+        null
+      }
+
+      is VmTransition.VmSuspended -> {
+        if (vmTransition.events.isNotEmpty()) {
+          state = reducer.apply(state, vmTransition.events)
+          accumulated += vmTransition.events
+        }
+        null
+      }
+
+      is VmTransition.VmFailed -> {
+        if (vmTransition.events.isNotEmpty()) {
+          state = reducer.apply(state, vmTransition.events)
+          accumulated += vmTransition.events
+        }
+        val seq = state.lastEventSequence + 1
+        val failEvent = GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.EFFECT_FAILED,
+          sourceCardId = null,
+          payload = GameEventPayload.EffectFailedPayload(
+            effectId = EffectId("${state.id.value}:fail:$seq"),
+            errorCode = vmTransition.error.code,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        state = reducer.apply(state, listOf(failEvent))
+        accumulated += failEvent
+        CommandResult.Failed(vmTransition.error, accumulated.toList(), state.lastEventSequence)
+      }
+    }
+  }
+
+  private fun drainAutomaticWork(accumulated: MutableList<GameEvent>): CommandResult? {
+    var iterations = 0
+    val maxIterations = 1000
+    while (iterations++ < maxIterations) {
+      if (state.pendingChoices.isNotEmpty()) break
+      if (state.status == GameStatus.FINISHED) break
+
+      val autoEvents = rulesEngine.processEvents(state, accumulated.takeLast(accumulated.size))
+      val autoRules = rulesEngine.processAutomaticRules(state)
+
+      val hasAutoEventWork = autoEvents.events.isNotEmpty() || autoEvents.programsToRun.isNotEmpty()
+      val hasAutoRuleWork = autoRules.events.isNotEmpty() || autoRules.programsToRun.isNotEmpty()
+
+      if (!hasAutoEventWork && !hasAutoRuleWork) break
+
+      for (transition in listOf(autoEvents, autoRules)) {
+        if (transition.events.isNotEmpty()) {
+          state = reducer.apply(state, transition.events)
+          accumulated += transition.events
+        }
+        for (request in transition.programsToRun) {
+          val vmResult = runVmStart(request, accumulated)
+          if (vmResult is CommandResult.Failed) return vmResult
+        }
+        if (transition.choiceToResume != null) {
+          val choice = transition.choiceToResume
+          val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }
+          if (frame != null) {
+            val vmResult = runVmResume(frame, choice, accumulated)
+            if (vmResult is CommandResult.Failed) return vmResult
+          }
+        }
+      }
+    }
+    return null
+  }
+
+  private fun buildEntry(command: GameCommand?, events: List<GameEvent>): GameLogEntry {
+    val lastSequence = history.log!!.entries.lastOrNull()?.sequence ?: 0L
+    return GameLogEntry(
+      sequence = lastSequence + 1,
+      command = command,
+      events = events,
+    )
+  }
+
+  private fun recordAutoEntry(events: List<GameEvent>) {
+    if (events.isEmpty()) return
+    val entry = buildEntry(null, events)
+    history.append(entry)
+  }
+
+  private fun isSetupCommand(command: GameCommand, setup: GameSetupState): Boolean {
+    return when (command) {
+      is ResolveMulliganCommand -> setup.step == GameSetupStep.MULLIGAN
+      is SubmitChoiceCommand -> true
+      is ConcedeCommand -> true
+      else -> false
+    }
+  }
+
+  private fun checkMulligansComplete(accumulated: MutableList<GameEvent>) {
+    val setup = state.setup ?: return
+    if (setup.step == GameSetupStep.MULLIGAN && setup.pendingMulliganPlayers.isEmpty()) {
+      advanceToLife(accumulated)
+      recordAutoEntry(accumulated)
+    }
+  }
+
+  private fun buildPublicView(targetPlayerId: PlayerId, viewerId: PlayerId): PlayerPublicView {
+    val player = state.players[targetPlayerId] ?: return PlayerPublicView(
+      playerId = targetPlayerId,
+      leader = null,
+      characters = emptyList(),
+      stage = null,
+      lifeCount = 0,
+      trash = emptyList(),
+      deckCount = 0,
+      costDon = emptyList(),
+      attachedDon = emptyMap(),
+    )
+
+    val leaderCardId = player.leader.cards.firstOrNull()
+    val leaderView = leaderCardId?.let { buildCardView(it, viewerId, authorized = true) }
+
+    val characterViews = player.characters.cards.map { buildCardView(it, viewerId, authorized = true) }
+
+    val stageCardId = player.stage.cards.firstOrNull()
+    val stageView = stageCardId?.let { buildCardView(it, viewerId, authorized = true) }
+
+    val trashViews = player.trash.cards.map { cardId ->
+      val card = state.cards[cardId]
+      val revealed = card != null && isVisibleTo(card.visibility, viewerId, card.ownerId)
+      buildCardView(cardId, viewerId, authorized = revealed)
+    }
+
+    val costDonViews = player.cost.cards.map { buildCardView(it, viewerId, authorized = true) }
+
+    val attachedDonMap = state.donAttachments.filter { attachment ->
+      val host = state.cards[attachment.hostCardId]
+      host != null && (host.ownerId == targetPlayerId || rulesEngine.effectiveController(
+        state, host.id
+      ) == targetPlayerId)
+    }.associate { it.hostCardId to it.donCardIds.size }
+
+    return PlayerPublicView(
+      playerId = targetPlayerId,
+      leader = leaderView,
+      characters = characterViews,
+      stage = stageView,
+      lifeCount = player.life.cards.size,
+      trash = trashViews,
+      deckCount = player.deck.cards.size,
+      costDon = costDonViews,
+      attachedDon = attachedDonMap,
+    )
+  }
+
+  private fun buildCardView(cardId: CardInstanceId, viewerId: PlayerId, authorized: Boolean): CardView {
+    val card = state.cards[cardId] ?: return CardView(
+      id = null,
+      definition = null,
+      controllerId = null,
+      orientation = CardOrientation.NOT_APPLICABLE,
+      faceState = FaceState.FACE_DOWN,
+      characteristics = null,
+      attachedDonCount = 0,
+    )
+
+    val canSeeIdentity = authorized && isVisibleTo(card.visibility, viewerId, card.ownerId)
+    val definition = if (canSeeIdentity) cardCatalog.get(card.definitionId) else null
+    val characteristics = if (canSeeIdentity) rulesEngine.effectiveCharacteristics(state, cardId) else null
+    val donCount = state.donAttachments.firstOrNull { it.hostCardId == cardId }?.donCardIds?.size ?: 0
+
+    return CardView(
+      id = if (canSeeIdentity) cardId else null,
+      definition = definition,
+      controllerId = if (canSeeIdentity) rulesEngine.effectiveController(state, cardId) ?: card.controllerId else null,
+      orientation = card.orientation,
+      faceState = card.faceState,
+      characteristics = characteristics,
+      attachedDonCount = donCount,
+    )
+  }
+
+  private fun isVisibleTo(visibility: CardVisibility, playerId: PlayerId, ownerId: PlayerId? = null): Boolean =
+    when (visibility) {
+      is CardVisibility.PUBLIC -> true
+      is CardVisibility.OWNER_ONLY -> ownerId == playerId
+      is CardVisibility.PLAYERS -> playerId in visibility.playerIds
+    }
+
+  private fun collectPublicEvents(viewerId: PlayerId): List<GameEvent> {
+    val log = history.log ?: return emptyList()
+    val allEvents = (log.initialEvents + log.entries.flatMap { it.events })
+    return allEvents.filter { event ->
+      when (val vis = event.visibility) {
+        is EventVisibility.PUBLIC -> true
+        is EventVisibility.PRIVATE_TO_PLAYER -> vis.playerId == viewerId
+        is EventVisibility.PRIVATE_TO_PLAYERS -> viewerId in vis.playerIds
+        is EventVisibility.INTERNAL -> false
+      }
+    }
+  }
+}
+
+object GameSerialization {
+  const val FORMAT_VERSION = 1
+
+  private val json = Json {
+    encodeDefaults = true
+    ignoreUnknownKeys = false
+    explicitNulls = true
+    classDiscriminator = "type"
+  }
+
+  @Serializable
+  private data class Envelope<T>(val formatVersion: Int, val payload: T)
+
+  private fun <T> encode(serializer: KSerializer<T>, payload: T): String =
+    json.encodeToString(Envelope.serializer(serializer), Envelope(FORMAT_VERSION, payload))
+
+  private fun <T> decode(serializer: KSerializer<T>, raw: String): T {
+    val envelope = json.decodeFromString(Envelope.serializer(serializer), raw)
+    require(envelope.formatVersion == FORMAT_VERSION) {
+      "Unsupported game format version ${envelope.formatVersion}, expected $FORMAT_VERSION"
+    }
+    return envelope.payload
+  }
+
+  fun encodeLog(log: GameLog): String = encode(GameLog.serializer(), log)
+
+  fun decodeLog(raw: String): GameLog = decode(GameLog.serializer(), raw)
+
+  fun decodeLog(raw: String, expectedManifest: GameManifest): GameLog {
+    val log = decodeLog(raw)
+    require(log.manifest == expectedManifest) {
+      "Log manifest does not match expected: expected=$expectedManifest, actual=${log.manifest}"
+    }
+    return log
+  }
+
+  fun encodeSnapshot(snapshot: GameSnapshot): String = encode(GameSnapshot.serializer(), snapshot)
+
+  fun decodeSnapshot(raw: String): GameSnapshot = decode(GameSnapshot.serializer(), raw)
+
+  fun encodeEntry(entry: GameLogEntry): String = encode(GameLogEntry.serializer(), entry)
+
+  fun decodeEntry(raw: String): GameLogEntry = decode(GameLogEntry.serializer(), raw)
+
+  fun encodeState(state: GameState): String = encode(GameState.serializer(), state)
+
+  fun decodeState(raw: String): GameState = decode(GameState.serializer(), raw)
+
+  fun encodeFrame(frame: ProgramFrame): String = encode(ProgramFrame.serializer(), frame)
+
+  fun decodeFrame(raw: String): ProgramFrame = decode(ProgramFrame.serializer(), raw)
+
+  fun encodeChoice(choice: PendingChoice): String = encode(PendingChoice.serializer(), choice)
+
+  fun decodeChoice(raw: String): PendingChoice = decode(PendingChoice.serializer(), raw)
 }
