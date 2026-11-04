@@ -1,63 +1,77 @@
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 sealed interface GameCommand {
   val playerId: PlayerId
 }
 
+@Serializable
 data class PlayCardCommand(
   override val playerId: PlayerId,
   val cardId: CardInstanceId,
 ) : GameCommand
 
+@Serializable
 data class ActivateAbilityCommand(
   override val playerId: PlayerId,
   val sourceCardId: CardInstanceId,
   val abilityId: AbilityId,
 ) : GameCommand
 
+@Serializable
 data class GiveDonCommand(
   override val playerId: PlayerId,
   val donId: CardInstanceId,
   val targetId: CardInstanceId,
 ) : GameCommand
 
+@Serializable
 data class DeclareAttackCommand(
   override val playerId: PlayerId,
   val attackerId: CardInstanceId,
   val targetId: BattleTarget,
 ) : GameCommand
 
+@Serializable
 data class ActivateBlockerCommand(
   override val playerId: PlayerId,
   val blockerId: CardInstanceId,
 ) : GameCommand
 
+@Serializable
 data class UseCharacterCounterCommand(
   override val playerId: PlayerId,
   val cardId: CardInstanceId,
   val targetId: CardInstanceId,
 ) : GameCommand
 
+@Serializable
 data class UseEventCounterCommand(
   override val playerId: PlayerId,
   val cardId: CardInstanceId,
 ) : GameCommand
 
+@Serializable
 data class EndMainPhaseCommand(
   override val playerId: PlayerId,
 ) : GameCommand
 
+@Serializable
 data class SubmitChoiceCommand(
   override val playerId: PlayerId,
   val choiceId: ChoiceId,
   val answer: ChoiceAnswer,
 ) : GameCommand
 
+@Serializable
 data class ResolveMulliganCommand(
   override val playerId: PlayerId,
   val redraw: Boolean,
 ) : GameCommand
 
+@Serializable
 data class ConcedeCommand(
   override val playerId: PlayerId,
 ) : GameCommand
