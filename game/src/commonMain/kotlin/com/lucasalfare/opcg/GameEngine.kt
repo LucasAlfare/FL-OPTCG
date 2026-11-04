@@ -1,5 +1,8 @@
 package com.lucasalfare.opcg
 
+import com.lucasalfare.opcg.rules.ProgramRequest
+import com.lucasalfare.opcg.rules.RuleViolation
+import com.lucasalfare.opcg.rules.RulesEngine
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
