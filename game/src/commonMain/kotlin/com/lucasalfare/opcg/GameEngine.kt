@@ -392,3 +392,145 @@ class GameStateReducer : EventApplier {
     return setZoneCards(player, zone, cards)
   }
 }
+
+data class GameSnapshot(
+  val manifest: GameManifest,
+  val state: GameState,
+  val lastLogEntrySequence: Long,
+)
+
+data class GameLogEntry(
+  val sequence: Long,
+  val command: GameCommand?,
+  val events: List<GameEvent>,
+)
+
+data class GameLog(
+  val manifest: GameManifest,
+  val initialSnapshot: GameSnapshot,
+  val initialEvents: List<GameEvent>,
+  val entries: List<GameLogEntry>,
+  val snapshots: List<GameSnapshot>,
+)
+
+class GameHistory(
+  private val reducer: GameStateReducer = GameStateReducer(),
+) {
+
+  var log: GameLog? = null
+    private set
+
+  fun initialize(snapshot: GameSnapshot, initialEvents: List<GameEvent>) {
+    require(snapshot.lastLogEntrySequence == 0L) {
+      "Initial snapshot must have lastLogEntrySequence = 0, got ${snapshot.lastLogEntrySequence}"
+    }
+    require(snapshot.state.lastEventSequence == expectedEventSequenceAfter(initialEvents)) {
+      "Initial snapshot state does not reflect initialEvents"
+    }
+    log = GameLog(
+      manifest = snapshot.manifest,
+      initialSnapshot = snapshot,
+      initialEvents = initialEvents,
+      entries = emptyList(),
+      snapshots = emptyList(),
+    )
+  }
+
+  fun load(log: GameLog) {
+    validate(log)
+    this.log = log
+  }
+
+  fun append(entry: GameLogEntry) {
+    val current = log ?: error("History not initialized")
+    val lastSequence = current.entries.lastOrNull()?.sequence ?: 0L
+    val expectedSequence = lastSequence + 1
+    require(entry.sequence == expectedSequence) {
+      "Expected log entry sequence $expectedSequence, got ${entry.sequence}"
+    }
+    log = current.copy(entries = current.entries + entry)
+  }
+
+  fun createSnapshot(state: GameState, lastLogEntrySequence: Long): GameSnapshot {
+    val current = log ?: error("History not initialized")
+    val maxSequence = current.entries.lastOrNull()?.sequence ?: 0L
+    require(lastLogEntrySequence in 0L..maxSequence) {
+      "Invalid lastLogEntrySequence: $lastLogEntrySequence (max $maxSequence)"
+    }
+    val expectedEventSequence = computeEventSequenceAt(current, lastLogEntrySequence)
+    require(state.lastEventSequence == expectedEventSequence) {
+      "State lastEventSequence ${state.lastEventSequence} does not match expected " + "$expectedEventSequence at log entry $lastLogEntrySequence"
+    }
+    val snapshot = GameSnapshot(current.manifest, state, lastLogEntrySequence)
+    log = current.copy(snapshots = current.snapshots + snapshot)
+    return snapshot
+  }
+
+  fun replay(snapshot: GameSnapshot, entries: List<GameLogEntry>): GameState {
+    val eventsToApply =
+      entries.asSequence().sortedBy { it.sequence }.filter { it.sequence > snapshot.lastLogEntrySequence }
+        .flatMap { it.events.asSequence() }.toList()
+    return reducer.apply(snapshot.state, eventsToApply)
+  }
+
+  private fun validate(log: GameLog) {
+    require(log.initialSnapshot.manifest == log.manifest) {
+      "Initial snapshot manifest does not match log manifest"
+    }
+    require(log.initialSnapshot.lastLogEntrySequence == 0L) {
+      "Initial snapshot must have lastLogEntrySequence = 0"
+    }
+    require(log.initialSnapshot.state.lastEventSequence == expectedEventSequenceAfter(log.initialEvents)) {
+      "Initial snapshot state does not reflect initialEvents"
+    }
+
+    log.entries.forEachIndexed { index, entry ->
+      val expectedSequence = index + 1L
+      require(entry.sequence == expectedSequence) {
+        "Log entry sequence mismatch: expected $expectedSequence, got ${entry.sequence}"
+      }
+    }
+
+    var expectedEventSequence = log.initialSnapshot.state.lastEventSequence + 1
+    for (entry in log.entries) {
+      for (event in entry.events) {
+        require(event.sequence == expectedEventSequence) {
+          "Event sequence mismatch in log entry ${entry.sequence}: " + "expected $expectedEventSequence, got ${event.sequence}"
+        }
+        expectedEventSequence += 1
+      }
+    }
+
+    for (snapshot in log.snapshots) {
+      require(snapshot.manifest == log.manifest) {
+        "Snapshot manifest does not match log manifest"
+      }
+      val maxSequence = log.entries.lastOrNull()?.sequence ?: 0L
+      require(snapshot.lastLogEntrySequence in 0L..maxSequence) {
+        "Snapshot lastLogEntrySequence ${snapshot.lastLogEntrySequence} out of range"
+      }
+      val expected = computeEventSequenceAt(log, snapshot.lastLogEntrySequence)
+      require(snapshot.state.lastEventSequence == expected) {
+        "Snapshot state lastEventSequence ${snapshot.state.lastEventSequence} does not " + "match expected $expected at log entry ${snapshot.lastLogEntrySequence}"
+      }
+    }
+  }
+
+  private fun expectedEventSequenceAfter(events: List<GameEvent>): Long {
+    return events.lastOrNull()?.sequence ?: 0L
+  }
+
+  private fun computeEventSequenceAt(log: GameLog, lastLogEntrySequence: Long): Long {
+    if (lastLogEntrySequence == 0L) {
+      return log.initialSnapshot.state.lastEventSequence
+    }
+    var sequence = log.initialSnapshot.state.lastEventSequence
+    for (entry in log.entries) {
+      if (entry.sequence > lastLogEntrySequence) break
+      if (entry.events.isNotEmpty()) {
+        sequence = entry.events.last().sequence
+      }
+    }
+    return sequence
+  }
+}
