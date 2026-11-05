@@ -133,10 +133,7 @@ internal class OpportunityCoordinator(private val players: List<PlayerId>) {
     return opportunity.playerId.value == turn.turnActor.id
   }
 
-  fun isEnded(): Boolean {
-    if (ended) return true
-    return next() == null
-  }
+  fun isEnded(): Boolean = ended
 
   fun end() {
     ended = true
