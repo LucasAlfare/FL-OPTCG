@@ -221,15 +221,15 @@ class VirtualMachine(
     }
 
     val pending = state.pendingChoices.firstOrNull { it.id == frame.pendingChoiceId }
-    val expectedPlayer = pending?.playerId ?: frame.context.controllerId
-    if (choice.playerId != expectedPlayer) {
+      ?: return fail(frame, state, emptyList(), "MISSING_CHOICE", "Pending choice not found in state")
+
+    if (choice.playerId != pending.playerId) {
       return fail(frame, state, emptyList(), "PLAYER_MISMATCH", "Player id does not match pending choice")
     }
-    if (pending != null) {
-      val validationError = validateAnswer(pending, choice.answer, frame.instructionPointer)
-      if (validationError != null) {
-        return VmTransition.VmFailed(validationError, state, emptyList())
-      }
+
+    val validationError = validateAnswer(pending, choice.answer, frame.instructionPointer)
+    if (validationError != null) {
+      return VmTransition.VmFailed(validationError, state, emptyList())
     }
 
     val block = currentBlock(frame)
@@ -303,7 +303,10 @@ class VirtualMachine(
           return VmError("INVALID_ANSWER", "Expected option answer", instructionPointer)
         }
         val allowed = pending.candidates.filterIsInstance<ChoiceCandidate.OptionCandidate>().map { it.optionId }
-        if (allowed.isNotEmpty() && answer.optionId !in allowed) {
+        if (allowed.isEmpty()) {
+          return VmError("NO_CANDIDATES", "No options available", instructionPointer)
+        }
+        if (answer.optionId !in allowed) {
           return VmError("INVALID_OPTION", "Option not in candidates", instructionPointer)
         }
         null
@@ -327,7 +330,13 @@ class VirtualMachine(
         if (count < pending.minimum || count > pending.maximum) {
           return VmError("OUT_OF_RANGE", "Selection count outside limits", instructionPointer)
         }
+        if (answer.cardIds.toSet().size != answer.cardIds.size) {
+          return VmError("DUPLICATE_CARDS", "Duplicate cards in selection", instructionPointer)
+        }
         val allowed = pending.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }.toSet()
+        if (allowed.isEmpty() && pending.minimum > 0) {
+          return VmError("NO_CANDIDATES", "No card candidates available", instructionPointer)
+        }
         if (allowed.isNotEmpty() && answer.cardIds.any { it !in allowed }) {
           return VmError("INVALID_CARD", "Card not in candidates", instructionPointer)
         }
@@ -339,7 +348,16 @@ class VirtualMachine(
           return VmError("INVALID_ANSWER", "Expected card order answer", instructionPointer)
         }
         val allowed = pending.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }
-        if (allowed.isNotEmpty() && answer.cardIds.toSet() != allowed.toSet()) {
+        if (allowed.isEmpty()) {
+          return VmError("NO_CANDIDATES", "No card candidates available", instructionPointer)
+        }
+        if (answer.cardIds.size != allowed.size) {
+          return VmError("INVALID_ORDER", "Order must contain exactly the candidate cards", instructionPointer)
+        }
+        if (answer.cardIds.toSet().size != answer.cardIds.size) {
+          return VmError("DUPLICATE_CARDS", "Duplicate cards in order", instructionPointer)
+        }
+        if (answer.cardIds.toSet() != allowed.toSet()) {
           return VmError("INVALID_ORDER", "Order must contain exactly the candidate cards", instructionPointer)
         }
         null

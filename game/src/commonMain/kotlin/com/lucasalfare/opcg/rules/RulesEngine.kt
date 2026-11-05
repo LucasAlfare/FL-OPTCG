@@ -446,7 +446,8 @@ class RulesEngine(
       ChoiceType.OPTION -> {
         if (answer !is ChoiceAnswer.OptionAnswer) return "Expected OptionAnswer"
         val allowed = choice.candidates.filterIsInstance<ChoiceCandidate.OptionCandidate>().map { it.optionId }
-        if (allowed.isNotEmpty() && answer.optionId !in allowed) return "Option not in candidates"
+        if (allowed.isEmpty()) return "No options available"
+        if (answer.optionId !in allowed) return "Option not in candidates"
         null
       }
 
@@ -460,7 +461,9 @@ class RulesEngine(
         if (answer !is ChoiceAnswer.CardSelectionAnswer) return "Expected CardSelectionAnswer"
         val count = answer.cardIds.size
         if (count < choice.minimum || count > choice.maximum) return "Selection count out of range"
+        if (answer.cardIds.toSet().size != answer.cardIds.size) return "Duplicate cards in selection"
         val allowed = choice.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }.toSet()
+        if (allowed.isEmpty() && choice.minimum > 0) return "No card candidates available"
         if (allowed.isNotEmpty() && answer.cardIds.any { it !in allowed }) return "Card not in candidates"
         null
       }
@@ -468,7 +471,10 @@ class RulesEngine(
       ChoiceType.CARD_ORDER -> {
         if (answer !is ChoiceAnswer.CardOrderAnswer) return "Expected CardOrderAnswer"
         val allowed = choice.candidates.filterIsInstance<ChoiceCandidate.CardCandidate>().map { it.cardId }
-        if (allowed.isNotEmpty() && answer.cardIds.toSet() != allowed.toSet()) return "Invalid card order"
+        if (allowed.isEmpty()) return "No card candidates available"
+        if (answer.cardIds.size != allowed.size) return "Invalid card order size"
+        if (answer.cardIds.toSet().size != answer.cardIds.size) return "Duplicate cards in order"
+        if (answer.cardIds.toSet() != allowed.toSet()) return "Invalid card order"
         null
       }
 
@@ -492,16 +498,6 @@ class RulesEngine(
       sourceCardId = null,
       payload = GameEventPayload.ChoiceSubmittedPayload(command.playerId, command.choiceId, command.answer),
       visibility = choice.visibility,
-    )
-
-    seq += 1
-    events += GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.PENDING_CHOICE_CHANGED,
-      sourceCardId = null,
-      payload = GameEventPayload.PendingChoiceChangedPayload(command.choiceId, null),
-      visibility = EventVisibility.INTERNAL,
     )
 
     return GameTransition(
