@@ -165,8 +165,17 @@ internal class ZoneInstructionExecutor {
     val amount = (amountResult as EvaluationResult.Success).value.let {
       (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
     }.coerceAtLeast(0)
+    if (amount == 0) return InstructionExecutionResult.Completed(null, emptyList())
     val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
-    val selected = player.hand.cards.take(amount)
+
+    // Respeita o CardSelector: intersecta as cartas da mão do player com o conjunto
+    // filtrado pelo seletor. Cartas que não casam com o filtro não são trashed.
+    val matched = evaluator.selectCardIds(instruction.selector, state, context) ?: return fail(
+      "SELECTOR_ERROR", "Failed to evaluate card selector"
+    )
+    val matchedSet = matched.toSet()
+    val selected = player.hand.cards.filter { it in matchedSet }.take(amount)
+
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
     for (cardId in selected) {
@@ -334,6 +343,12 @@ internal class ZoneInstructionExecutor {
 
 internal class DonInstructionExecutor {
 
+  private data class ReturnDonCandidate(
+    val cardId: CardInstanceId,
+    val sourceZone: ZoneType,
+    val hostCardId: CardInstanceId?,
+  )
+
   fun addDon(
     state: GameState,
     instruction: AddDon,
@@ -396,22 +411,42 @@ internal class DonInstructionExecutor {
     if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
     val amount = (amountResult as EvaluationResult.Success).value.let {
       (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
-    }
+    }.coerceAtLeast(0)
+    if (amount == 0) return InstructionExecutionResult.Completed(null, emptyList())
     val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
-    val candidates = player.cost.cards.filter { id ->
+
+    // Default (zones vazio) preserva o comportamento anterior: apenas COST.
+    val zones = if (instruction.selector.zones.isEmpty()) setOf(ZoneType.COST) else instruction.selector.zones
+    val requestedOrientation = instruction.selector.orientation
+
+    // "Rest" só faz sentido em DON ACTIVE. Orientação explicitamente não-ACTIVE = sem candidatos.
+    if (requestedOrientation != null && requestedOrientation != CardOrientation.ACTIVE) {
+      return InstructionExecutionResult.Completed(null, emptyList())
+    }
+
+    val candidateIds = mutableListOf<CardInstanceId>()
+    if (ZoneType.COST in zones) {
+      candidateIds += player.cost.cards
+    }
+    if (ZoneType.ATTACHED_DON in zones) {
+      candidateIds += state.donAttachments.flatMap { it.donCardIds }
+        .filter { id -> state.cards[id]?.ownerId == instruction.playerId }
+    }
+
+    val eligible = candidateIds.filter { id ->
       val card = state.cards[id] ?: return@filter false
-      val orientationOk =
-        instruction.selector.orientation == null || card.orientation == instruction.selector.orientation
-      orientationOk && card.orientation == CardOrientation.ACTIVE
+      card.orientation == CardOrientation.ACTIVE
     }.take(amount)
-    if (candidates.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+
+    if (eligible.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+
     val seq = state.lastEventSequence + 1
     val event = GameEvent(
       id = EventId("${state.id.value}:$seq"),
       sequence = seq,
       type = GameEventType.DON_RESTED,
       sourceCardId = null,
-      payload = GameEventPayload.DonRestedPayload(instruction.playerId, candidates),
+      payload = GameEventPayload.DonRestedPayload(instruction.playerId, eligible),
       visibility = EventVisibility.PUBLIC,
     )
     return InstructionExecutionResult.Completed(null, listOf(event))
@@ -496,20 +531,84 @@ internal class DonInstructionExecutor {
     if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
     val amount = (amountResult as EvaluationResult.Success).value.let {
       (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
-    }
+    }.coerceAtLeast(0)
+    if (amount == 0) return InstructionExecutionResult.Completed(null, emptyList())
     val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
-    val candidates = player.cost.cards.take(amount)
+
+    // Default (zones vazio) preserva o comportamento anterior: apenas COST.
+    val zones = if (instruction.selector.zones.isEmpty()) setOf(ZoneType.COST) else instruction.selector.zones
+    val requestedOrientation = instruction.selector.orientation
+
+    val candidates = mutableListOf<ReturnDonCandidate>()
+    if (ZoneType.COST in zones) {
+      for (id in player.cost.cards) {
+        val card = state.cards[id] ?: continue
+        if (requestedOrientation != null && card.orientation != requestedOrientation) continue
+        candidates += ReturnDonCandidate(id, ZoneType.COST, null)
+      }
+    }
+    if (ZoneType.ATTACHED_DON in zones) {
+      for (attachment in state.donAttachments) {
+        for (donId in attachment.donCardIds) {
+          val don = state.cards[donId] ?: continue
+          if (don.ownerId != instruction.playerId) continue
+          if (requestedOrientation != null && don.orientation != requestedOrientation) continue
+          candidates += ReturnDonCandidate(donId, ZoneType.ATTACHED_DON, attachment.hostCardId)
+        }
+      }
+    }
+
     if (candidates.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
-    val seq = state.lastEventSequence + 1
-    val event = GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.DON_RETURNED,
-      sourceCardId = null,
-      payload = GameEventPayload.DonReturnedPayload(instruction.playerId, candidates),
-      visibility = EventVisibility.PUBLIC,
-    )
-    return InstructionExecutionResult.Completed(null, listOf(event))
+    val selected = candidates.take(amount)
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    // Origem COST → destino DON_DECK (retorno padrão).
+    for (candidate in selected.filter { it.sourceZone == ZoneType.COST }) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = candidate.cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = candidate.cardId,
+          fromPlayerId = instruction.playerId,
+          fromZone = ZoneType.COST,
+          toPlayerId = instruction.playerId,
+          toZone = ZoneType.DON_DECK,
+          destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_DOWN,
+          visibility = CardVisibility.OWNER_ONLY,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    // Origem ATTACHED_DON → destino COST (detach e devolve à Cost Area).
+    val attachedByHost = selected.filter { it.sourceZone == ZoneType.ATTACHED_DON }.groupBy { it.hostCardId!! }
+    for ((hostId, donCandidates) in attachedByHost) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DON_DETACHED,
+        sourceCardId = hostId,
+        payload = GameEventPayload.DonDetachedPayload(
+          hostCardId = hostId,
+          donCardIds = donCandidates.map { it.cardId },
+          destinationPlayerId = instruction.playerId,
+          destinationZone = ZoneType.COST,
+          destinationIndex = null,
+        ),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    return InstructionExecutionResult.Completed(null, events)
   }
 
   fun detachDon(
