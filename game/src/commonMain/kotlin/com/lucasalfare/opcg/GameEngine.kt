@@ -40,17 +40,10 @@ class GameStateReducer : EventApplier {
         state.copy(setup = newSetup)
       }
 
-      is GameEventPayload.GameStartedPayload -> state.copy(
-        status = GameStatus.IN_PROGRESS,
-        setup = null,
-      )
+      is GameEventPayload.GameStartedPayload -> state.copy(status = GameStatus.IN_PROGRESS, setup = null)
 
       is GameEventPayload.TurnStartedPayload -> state.copy(
-        turn = TurnState(
-          number = payload.turnNumber,
-          playerId = payload.playerId,
-          phase = GamePhase.REFRESH,
-        )
+        turn = TurnState(number = payload.turnNumber, playerId = payload.playerId, phase = GamePhase.REFRESH)
       )
 
       is GameEventPayload.PhaseChangedPayload -> {
@@ -59,11 +52,8 @@ class GameStateReducer : EventApplier {
       }
 
       is GameEventPayload.TurnEndedPayload -> state.copy(turn = null)
-
       is GameEventPayload.CardPlayedPayload -> state
-
       is GameEventPayload.CardsDrawnPayload -> state
-
       is GameEventPayload.CardMovedPayload -> applyCardMoved(state, payload)
 
       is GameEventPayload.CardRevealedPayload -> {
@@ -79,16 +69,13 @@ class GameStateReducer : EventApplier {
         val card = state.cards[payload.cardId] ?: return state
         state.copy(
           cards = state.cards + (payload.cardId to card.copy(
-            orientation = payload.orientation,
-            faceState = payload.faceState,
+            orientation = payload.orientation, faceState = payload.faceState,
           ))
         )
       }
 
       is GameEventPayload.CardActivatedPayload -> state
-
       is GameEventPayload.CardKnockedOutPayload -> state
-
       is GameEventPayload.DonAddedPayload -> state
 
       is GameEventPayload.DonRestedPayload -> {
@@ -101,9 +88,7 @@ class GameStateReducer : EventApplier {
       }
 
       is GameEventPayload.DonAttachedPayload -> applyDonAttached(state, payload)
-
       is GameEventPayload.DonDetachedPayload -> applyDonDetached(state, payload)
-
       is GameEventPayload.DonReturnedPayload -> state
 
       is GameEventPayload.AttackDeclaredPayload -> state.copy(
@@ -124,12 +109,7 @@ class GameStateReducer : EventApplier {
 
       is GameEventPayload.BlockActivatedPayload -> {
         val battle = state.battle ?: return state
-        state.copy(
-          battle = battle.copy(
-            currentTarget = payload.newTarget,
-            blockerUsed = true,
-          )
-        )
+        state.copy(battle = battle.copy(currentTarget = payload.newTarget, blockerUsed = true))
       }
 
       is GameEventPayload.CounterActivatedPayload -> {
@@ -138,9 +118,7 @@ class GameStateReducer : EventApplier {
       }
 
       is GameEventPayload.BattleEndedPayload -> state.copy(battle = null)
-
       is GameEventPayload.DamageProcessedPayload -> state
-
       is GameEventPayload.LifeChangedPayload -> state
 
       is GameEventPayload.EffectActivatedPayload -> {
@@ -149,26 +127,17 @@ class GameStateReducer : EventApplier {
         val card = state.cards[sourceCardId] ?: return state
         val turnNumber = state.turn?.number ?: 0
         val key = AbilityUsageKey(card.objectId, abilityId, turnNumber)
-        state.copy(
-          abilityUsage = state.abilityUsage + (key to (state.abilityUsage[key] ?: 0) + 1)
-        )
+        state.copy(abilityUsage = state.abilityUsage + (key to (state.abilityUsage[key] ?: 0) + 1))
       }
 
       is GameEventPayload.EffectResolvedPayload -> state
-
       is GameEventPayload.EffectFailedPayload -> state
-
-      is GameEventPayload.ModifierAddedPayload -> state.copy(
-        activeEffects = state.activeEffects + payload.effect
-      )
-
+      is GameEventPayload.ModifierAddedPayload -> state.copy(activeEffects = state.activeEffects + payload.effect)
       is GameEventPayload.ModifierExpiredPayload -> state.copy(
         activeEffects = state.activeEffects.filterNot { it.id == payload.effectId })
 
       is GameEventPayload.ReplacementAppliedPayload -> state
-
       is GameEventPayload.DeckShuffledPayload -> applyDeckShuffled(state, payload)
-
       is GameEventPayload.ChoiceSubmittedPayload -> state
 
       is GameEventPayload.MulliganResolvedPayload -> {
@@ -183,27 +152,19 @@ class GameStateReducer : EventApplier {
 
       is GameEventPayload.PlayerWonPayload -> {
         val loserIds = state.playerOrder.filter { it != payload.playerId }.toSet()
-        state.copy(
-          status = GameStatus.FINISHED,
-          result = GameResult(payload.playerId, loserIds, payload.reason),
-        )
+        state.copy(status = GameStatus.FINISHED, result = GameResult(payload.playerId, loserIds, payload.reason))
       }
 
       is GameEventPayload.PlayerLostPayload -> {
         val currentLosers = state.result?.loserIds ?: emptySet()
         val newLosers = currentLosers + payload.playerId
         val allPlayers = state.playerOrder.toSet()
-        val winner = if (newLosers.containsAll(allPlayers)) null
-        else (allPlayers - newLosers).firstOrNull()
-        state.copy(
-          status = GameStatus.FINISHED,
-          result = GameResult(winner, newLosers, payload.reason),
-        )
+        val winner = if (newLosers.containsAll(allPlayers)) null else (allPlayers - newLosers).firstOrNull()
+        state.copy(status = GameStatus.FINISHED, result = GameResult(winner, newLosers, payload.reason))
       }
 
       is GameEventPayload.GameDrawnPayload -> state.copy(
-        status = GameStatus.FINISHED,
-        result = GameResult(null, payload.playerIds, payload.reason),
+        status = GameStatus.FINISHED, result = GameResult(null, payload.playerIds, payload.reason)
       )
 
       is GameEventPayload.ProgramFrameChangedPayload -> {
@@ -241,10 +202,7 @@ class GameStateReducer : EventApplier {
     }
   }
 
-  private fun applyCardMoved(
-    state: GameState,
-    payload: GameEventPayload.CardMovedPayload,
-  ): GameState {
+  private fun applyCardMoved(state: GameState, payload: GameEventPayload.CardMovedPayload): GameState {
     val cardId = payload.cardId
     var newPlayers = state.players
     var newDonAttachments = state.donAttachments
@@ -254,9 +212,7 @@ class GameStateReducer : EventApplier {
         if (cardId in attachment.donCardIds) {
           val remaining = attachment.donCardIds - cardId
           if (remaining.isEmpty()) null else attachment.copy(donCardIds = remaining)
-        } else {
-          attachment
-        }
+        } else attachment
       }
     } else {
       val fromPlayer = newPlayers[payload.fromPlayerId]
@@ -275,24 +231,23 @@ class GameStateReducer : EventApplier {
     }
 
     val newCards = state.cards[cardId]?.let { card ->
+      val newEnteredPlayTurn = when {
+        payload.toZone == ZoneType.CHARACTER && payload.fromZone != ZoneType.CHARACTER -> state.turn?.number
+        payload.fromZone == ZoneType.CHARACTER && payload.toZone != ZoneType.CHARACTER -> null
+        else -> card.enteredPlayTurn
+      }
       state.cards + (cardId to card.copy(
         orientation = payload.orientation,
         faceState = payload.faceState,
         visibility = payload.visibility,
+        enteredPlayTurn = newEnteredPlayTurn,
       ))
     } ?: state.cards
 
-    return state.copy(
-      players = newPlayers,
-      donAttachments = newDonAttachments,
-      cards = newCards,
-    )
+    return state.copy(players = newPlayers, donAttachments = newDonAttachments, cards = newCards)
   }
 
-  private fun applyDonAttached(
-    state: GameState,
-    payload: GameEventPayload.DonAttachedPayload,
-  ): GameState {
+  private fun applyDonAttached(state: GameState, payload: GameEventPayload.DonAttachedPayload): GameState {
     var newPlayers = state.players
     for (donId in payload.donCardIds) {
       for ((playerId, player) in newPlayers) {
@@ -306,11 +261,7 @@ class GameStateReducer : EventApplier {
     val existing = state.donAttachments.find { it.hostCardId == payload.hostCardId }
     val newAttachments = if (existing != null) {
       state.donAttachments.map {
-        if (it.hostCardId == payload.hostCardId) {
-          it.copy(donCardIds = it.donCardIds + payload.donCardIds)
-        } else {
-          it
-        }
+        if (it.hostCardId == payload.hostCardId) it.copy(donCardIds = it.donCardIds + payload.donCardIds) else it
       }
     } else {
       state.donAttachments + DonAttachment(payload.hostCardId, payload.donCardIds)
@@ -319,17 +270,12 @@ class GameStateReducer : EventApplier {
     return state.copy(players = newPlayers, donAttachments = newAttachments)
   }
 
-  private fun applyDonDetached(
-    state: GameState,
-    payload: GameEventPayload.DonDetachedPayload,
-  ): GameState {
+  private fun applyDonDetached(state: GameState, payload: GameEventPayload.DonDetachedPayload): GameState {
     val newAttachments = state.donAttachments.mapNotNull { attachment ->
       if (attachment.hostCardId == payload.hostCardId) {
         val remaining = attachment.donCardIds - payload.donCardIds.toSet()
         if (remaining.isEmpty()) null else attachment.copy(donCardIds = remaining)
-      } else {
-        attachment
-      }
+      } else attachment
     }
 
     val newPlayers: Map<PlayerId, PlayerState> = state.players[payload.destinationPlayerId]?.let { destPlayer ->
@@ -344,10 +290,7 @@ class GameStateReducer : EventApplier {
     return state.copy(players = newPlayers, donAttachments = newAttachments)
   }
 
-  private fun applyDeckShuffled(
-    state: GameState,
-    payload: GameEventPayload.DeckShuffledPayload,
-  ): GameState {
+  private fun applyDeckShuffled(state: GameState, payload: GameEventPayload.DeckShuffledPayload): GameState {
     val player = state.players[payload.playerId] ?: return state
     val updated = setZoneCards(player, payload.zone, payload.resultingOrder)
     return state.copy(
@@ -369,74 +312,45 @@ class GameStateReducer : EventApplier {
     ZoneType.ATTACHED_DON -> emptyList()
   }
 
-  private fun setZoneCards(
-    player: PlayerState,
-    zone: ZoneType,
-    cards: List<CardInstanceId>,
-  ): PlayerState = when (zone) {
-    ZoneType.DECK -> player.copy(deck = ZoneState(cards))
-    ZoneType.DON_DECK -> player.copy(donDeck = ZoneState(cards))
-    ZoneType.HAND -> player.copy(hand = ZoneState(cards))
-    ZoneType.TRASH -> player.copy(trash = ZoneState(cards))
-    ZoneType.LEADER -> player.copy(leader = ZoneState(cards))
-    ZoneType.CHARACTER -> player.copy(characters = ZoneState(cards))
-    ZoneType.STAGE -> player.copy(stage = ZoneState(cards))
-    ZoneType.COST -> player.copy(cost = ZoneState(cards))
-    ZoneType.LIFE -> player.copy(life = ZoneState(cards))
-    ZoneType.ATTACHED_DON -> player
-  }
+  private fun setZoneCards(player: PlayerState, zone: ZoneType, cards: List<CardInstanceId>): PlayerState =
+    when (zone) {
+      ZoneType.DECK -> player.copy(deck = ZoneState(cards))
+      ZoneType.DON_DECK -> player.copy(donDeck = ZoneState(cards))
+      ZoneType.HAND -> player.copy(hand = ZoneState(cards))
+      ZoneType.TRASH -> player.copy(trash = ZoneState(cards))
+      ZoneType.LEADER -> player.copy(leader = ZoneState(cards))
+      ZoneType.CHARACTER -> player.copy(characters = ZoneState(cards))
+      ZoneType.STAGE -> player.copy(stage = ZoneState(cards))
+      ZoneType.COST -> player.copy(cost = ZoneState(cards))
+      ZoneType.LIFE -> player.copy(life = ZoneState(cards))
+      ZoneType.ATTACHED_DON -> player
+    }
 
-  private fun removeCardFromZone(
-    player: PlayerState,
-    zone: ZoneType,
-    cardId: CardInstanceId,
-  ): PlayerState {
+  private fun removeCardFromZone(player: PlayerState, zone: ZoneType, cardId: CardInstanceId): PlayerState {
     val cards = getZoneCards(player, zone)
     return setZoneCards(player, zone, cards - cardId)
   }
 
-  private fun addCardToZone(
-    player: PlayerState,
-    zone: ZoneType,
-    cardId: CardInstanceId,
-    index: Int?,
-  ): PlayerState {
+  private fun addCardToZone(player: PlayerState, zone: ZoneType, cardId: CardInstanceId, index: Int?): PlayerState {
     val cards = getZoneCards(player, zone).toMutableList()
-    if (index != null && index in 0..cards.size) {
-      cards.add(index, cardId)
-    } else {
-      cards.add(cardId)
-    }
+    if (index != null && index in 0..cards.size) cards.add(index, cardId) else cards.add(cardId)
     return setZoneCards(player, zone, cards)
   }
 }
 
 @Serializable
-data class GameSnapshot(
-  val manifest: GameManifest,
-  val state: GameState,
-  val lastLogEntrySequence: Long,
-)
+data class GameSnapshot(val manifest: GameManifest, val state: GameState, val lastLogEntrySequence: Long)
 
 @Serializable
-data class GameLogEntry(
-  val sequence: Long,
-  val command: GameCommand?,
-  val events: List<GameEvent>,
-)
+data class GameLogEntry(val sequence: Long, val command: GameCommand?, val events: List<GameEvent>)
 
 @Serializable
 data class GameLog(
-  val manifest: GameManifest,
-  val initialSnapshot: GameSnapshot,
-  val initialEvents: List<GameEvent>,
-  val entries: List<GameLogEntry>,
-  val snapshots: List<GameSnapshot>,
+  val manifest: GameManifest, val initialSnapshot: GameSnapshot,
+  val initialEvents: List<GameEvent>, val entries: List<GameLogEntry>, val snapshots: List<GameSnapshot>,
 )
 
-class GameHistory(
-  private val reducer: GameStateReducer = GameStateReducer(),
-) {
+class GameHistory(private val reducer: GameStateReducer = GameStateReducer()) {
 
   var log: GameLog? = null
     private set
@@ -449,17 +363,13 @@ class GameHistory(
       "Initial snapshot state does not reflect initialEvents"
     }
     log = GameLog(
-      manifest = snapshot.manifest,
-      initialSnapshot = snapshot,
-      initialEvents = initialEvents,
-      entries = emptyList(),
-      snapshots = emptyList(),
+      manifest = snapshot.manifest, initialSnapshot = snapshot,
+      initialEvents = initialEvents, entries = emptyList(), snapshots = emptyList(),
     )
   }
 
   fun load(log: GameLog) {
-    validate(log)
-    this.log = log
+    validate(log); this.log = log
   }
 
   fun append(entry: GameLogEntry) {
@@ -480,7 +390,7 @@ class GameHistory(
     }
     val expectedEventSequence = computeEventSequenceAt(current, lastLogEntrySequence)
     require(state.lastEventSequence == expectedEventSequence) {
-      "State lastEventSequence ${state.lastEventSequence} does not match expected " + "$expectedEventSequence at log entry $lastLogEntrySequence"
+      "State lastEventSequence ${state.lastEventSequence} does not match expected $expectedEventSequence"
     }
     val snapshot = GameSnapshot(current.manifest, state, lastLogEntrySequence)
     log = current.copy(snapshots = current.snapshots + snapshot)
@@ -516,41 +426,33 @@ class GameHistory(
     for (entry in log.entries) {
       for (event in entry.events) {
         require(event.sequence == expectedEventSequence) {
-          "Event sequence mismatch in log entry ${entry.sequence}: " + "expected $expectedEventSequence, got ${event.sequence}"
+          "Event sequence mismatch in log entry ${entry.sequence}: expected $expectedEventSequence, got ${event.sequence}"
         }
         expectedEventSequence += 1
       }
     }
 
     for (snapshot in log.snapshots) {
-      require(snapshot.manifest == log.manifest) {
-        "Snapshot manifest does not match log manifest"
-      }
+      require(snapshot.manifest == log.manifest) { "Snapshot manifest does not match log manifest" }
       val maxSequence = log.entries.lastOrNull()?.sequence ?: 0L
       require(snapshot.lastLogEntrySequence in 0L..maxSequence) {
         "Snapshot lastLogEntrySequence ${snapshot.lastLogEntrySequence} out of range"
       }
       val expected = computeEventSequenceAt(log, snapshot.lastLogEntrySequence)
       require(snapshot.state.lastEventSequence == expected) {
-        "Snapshot state lastEventSequence ${snapshot.state.lastEventSequence} does not " + "match expected $expected at log entry ${snapshot.lastLogEntrySequence}"
+        "Snapshot state lastEventSequence ${snapshot.state.lastEventSequence} does not match expected $expected"
       }
     }
   }
 
-  private fun expectedEventSequenceAfter(events: List<GameEvent>): Long {
-    return events.lastOrNull()?.sequence ?: 0L
-  }
+  private fun expectedEventSequenceAfter(events: List<GameEvent>): Long = events.lastOrNull()?.sequence ?: 0L
 
   private fun computeEventSequenceAt(log: GameLog, lastLogEntrySequence: Long): Long {
-    if (lastLogEntrySequence == 0L) {
-      return log.initialSnapshot.state.lastEventSequence
-    }
+    if (lastLogEntrySequence == 0L) return log.initialSnapshot.state.lastEventSequence
     var sequence = log.initialSnapshot.state.lastEventSequence
     for (entry in log.entries) {
       if (entry.sequence > lastLogEntrySequence) break
-      if (entry.events.isNotEmpty()) {
-        sequence = entry.events.last().sequence
-      }
+      if (entry.events.isNotEmpty()) sequence = entry.events.last().sequence
     }
     return sequence
   }
@@ -572,39 +474,22 @@ sealed class CommandResult {
 }
 
 data class CardView(
-  val id: CardInstanceId?,
-  val definition: CardDefinition?,
-  val controllerId: PlayerId?,
-  val orientation: CardOrientation,
-  val faceState: FaceState,
-  val characteristics: EffectiveCharacteristics?,
-  val attachedDonCount: Int,
+  val id: CardInstanceId?, val definition: CardDefinition?, val controllerId: PlayerId?,
+  val orientation: CardOrientation, val faceState: FaceState,
+  val characteristics: EffectiveCharacteristics?, val attachedDonCount: Int,
 )
 
 data class PlayerPublicView(
-  val playerId: PlayerId,
-  val leader: CardView?,
-  val characters: List<CardView>,
-  val stage: CardView?,
-  val lifeCount: Int,
-  val trash: List<CardView>,
-  val deckCount: Int,
-  val costDon: List<CardView>,
-  val attachedDon: Map<CardInstanceId, Int>,
+  val playerId: PlayerId, val leader: CardView?, val characters: List<CardView>,
+  val stage: CardView?, val lifeCount: Int, val trash: List<CardView>, val deckCount: Int,
+  val costDon: List<CardView>, val attachedDon: Map<CardInstanceId, Int>,
 )
 
 data class PlayerView(
-  val gameId: GameId,
-  val viewerId: PlayerId,
-  val status: GameStatus,
-  val turn: TurnState?,
-  val battle: BattleState?,
-  val players: List<PlayerPublicView>,
-  val ownHand: List<CardView>,
-  val opponentHandCount: Int,
-  val revealedCards: List<CardView>,
-  val publicEvents: List<GameEvent>,
-  val pendingChoice: PendingChoice?,
+  val gameId: GameId, val viewerId: PlayerId, val status: GameStatus,
+  val turn: TurnState?, val battle: BattleState?, val players: List<PlayerPublicView>,
+  val ownHand: List<CardView>, val opponentHandCount: Int, val revealedCards: List<CardView>,
+  val publicEvents: List<GameEvent>, val pendingChoice: PendingChoice?,
 )
 
 class GameEngine private constructor(
@@ -618,50 +503,31 @@ class GameEngine private constructor(
 ) {
 
   companion object {
-
     fun create(
-      setup: GameSetup,
-      manifest: GameManifest,
-      cardCatalog: CardCatalog,
-      rulesEngine: RulesEngine,
-      virtualMachine: VirtualMachine,
-      reducer: GameStateReducer,
-      history: GameHistory,
+      setup: GameSetup, manifest: GameManifest, cardCatalog: CardCatalog,
+      rulesEngine: RulesEngine, virtualMachine: VirtualMachine,
+      reducer: GameStateReducer, history: GameHistory,
     ): GameEngine {
       val creationResult = rulesEngine.createInitialState(setup)
       val stateAfterInit = reducer.apply(creationResult.initialState, creationResult.initialEvents)
-
-      val initialSnapshot = GameSnapshot(
-        manifest = manifest,
-        state = stateAfterInit,
-        lastLogEntrySequence = 0L,
-      )
+      val initialSnapshot = GameSnapshot(manifest, stateAfterInit, 0L)
       history.initialize(initialSnapshot, creationResult.initialEvents)
-
       val engine = GameEngine(stateAfterInit, manifest, cardCatalog, rulesEngine, virtualMachine, reducer, history)
       engine.runSetupPhase()
       return engine
     }
 
     fun restore(
-      log: GameLog,
-      cardCatalog: CardCatalog,
-      rulesEngine: RulesEngine,
-      virtualMachine: VirtualMachine,
-      reducer: GameStateReducer,
-      history: GameHistory,
+      log: GameLog, cardCatalog: CardCatalog, rulesEngine: RulesEngine,
+      virtualMachine: VirtualMachine, reducer: GameStateReducer, history: GameHistory,
     ): GameEngine {
       val stored = log.manifest
       require(stored.rulesVersion == log.manifest.rulesVersion) { "Rules version mismatch" }
       require(stored.cardCatalogVersion == cardCatalog.version) { "Card catalog version mismatch" }
       require(stored.cardCatalogHash == cardCatalog.hash) { "Card catalog hash mismatch" }
-
       history.load(log)
-
       val base = log.snapshots.lastOrNull() ?: log.initialSnapshot
-      val allEntries = log.entries
-      val state = history.replay(base, allEntries)
-
+      val state = history.replay(base, log.entries)
       return GameEngine(state, log.manifest, cardCatalog, rulesEngine, virtualMachine, reducer, history)
     }
   }
@@ -686,9 +552,7 @@ class GameEngine private constructor(
     }
 
     val validation = rulesEngine.validate(state, command)
-    if (!validation.valid) {
-      return CommandResult.Rejected(validation.violations)
-    }
+    if (!validation.valid) return CommandResult.Rejected(validation.violations)
 
     val transactionEvents = mutableListOf<GameEvent>()
 
@@ -733,14 +597,9 @@ class GameEngine private constructor(
     }
 
     continueSetupIfNeeded(transactionEvents)
-
     appendTransaction(command, transactionEvents)
 
-    val extraEvents = if (command is ResolveMulliganCommand) {
-      checkMulligansComplete()
-    } else {
-      emptyList()
-    }
+    val extraEvents = if (command is ResolveMulliganCommand) checkMulligansComplete() else emptyList()
 
     return if (state.pendingChoices.isNotEmpty()) {
       val blocking = state.pendingChoices.first()
@@ -756,24 +615,16 @@ class GameEngine private constructor(
     if (setup.step != GameSetupStep.INITIAL_EFFECTS) return
     if (state.pendingChoices.isNotEmpty()) return
     if (state.activePrograms.isNotEmpty()) return
-
     val done = processInitialLeaderEffects(accumulated)
-    if (done) {
-      advanceToOpeningHand(accumulated)
-    }
+    if (done) advanceToOpeningHand(accumulated)
   }
 
   private fun checkMulligansComplete(): List<GameEvent> {
     val setup = state.setup ?: return emptyList()
-    if (setup.step != GameSetupStep.MULLIGAN || setup.pendingMulliganPlayers.isNotEmpty()) {
-      return emptyList()
-    }
-
+    if (setup.step != GameSetupStep.MULLIGAN || setup.pendingMulliganPlayers.isNotEmpty()) return emptyList()
     val setupEvents = mutableListOf<GameEvent>()
     advanceToLife(setupEvents)
-    if (setupEvents.isNotEmpty()) {
-      history.append(buildEntry(null, setupEvents))
-    }
+    if (setupEvents.isNotEmpty()) history.append(buildEntry(null, setupEvents))
     return setupEvents
   }
 
@@ -782,68 +633,45 @@ class GameEngine private constructor(
   fun view(playerId: PlayerId): PlayerView {
     val opponentId = state.playerOrder.firstOrNull { it != playerId }
     val opponentHandCount = opponentId?.let { state.players[it]?.hand?.cards?.size } ?: 0
-
     val revealedIds = state.cards.values.filter { card ->
-      isVisibleTo(
-        card.visibility, playerId, card.ownerId
-      ) && card.faceState == FaceState.FACE_UP
+      isVisibleTo(card.visibility, playerId, card.ownerId) && card.faceState == FaceState.FACE_UP
     }.map { it.id }.toSet()
-
     val publicViews = state.playerOrder.map { pid -> buildPublicView(pid, playerId) }
-
-    val ownHand = state.players[playerId]?.hand?.cards?.map { cardId ->
-      buildCardView(cardId, playerId, authorized = true)
-    } ?: emptyList()
-
+    val ownHand =
+      state.players[playerId]?.hand?.cards?.map { buildCardView(it, playerId, authorized = true) } ?: emptyList()
     val revealedCards = revealedIds.filter { id -> state.players[playerId]?.hand?.cards?.contains(id) != true }
-      .map { cardId -> buildCardView(cardId, playerId, authorized = true) }
-
+      .map { buildCardView(it, playerId, authorized = true) }
     val pendingChoice = state.pendingChoices.firstOrNull { it.playerId == playerId }
-
     val publicEvents = collectPublicEvents(playerId)
-
     return PlayerView(
-      gameId = state.id,
-      viewerId = playerId,
-      status = state.status,
-      turn = state.turn,
-      battle = state.battle,
-      players = publicViews,
-      ownHand = ownHand,
-      opponentHandCount = opponentHandCount,
-      revealedCards = revealedCards,
-      publicEvents = publicEvents,
-      pendingChoice = pendingChoice,
+      gameId = state.id, viewerId = playerId, status = state.status,
+      turn = state.turn, battle = state.battle, players = publicViews, ownHand = ownHand,
+      opponentHandCount = opponentHandCount, revealedCards = revealedCards,
+      publicEvents = publicEvents, pendingChoice = pendingChoice,
     )
   }
 
   private fun runSetupPhase() {
     val setupEvents = mutableListOf<GameEvent>()
-
     val initialEffectsResult = processInitialLeaderEffects(setupEvents)
     if (initialEffectsResult != null) return
-
     advanceToOpeningHand(setupEvents)
     recordAutoEntry(setupEvents)
   }
 
   private fun processInitialLeaderEffects(accumulated: MutableList<GameEvent>): Boolean {
     if (state.setup?.step != GameSetupStep.INITIAL_EFFECTS) return true
-
     val chooser = state.chooserPlayerId
     val other = state.playerOrder.firstOrNull { it != chooser } ?: return true
     val players = listOf(chooser, other)
-
     var progress = state.setup?.initialEffectsProgress ?: InitialEffectsProgress(0, 0)
 
     while (progress.playerIndex < players.size) {
       val playerId = players[progress.playerIndex]
       val player = state.players[playerId]
-
       val leaderCardId = player?.leader?.cards?.firstOrNull()
       val leaderInstance = leaderCardId?.let { state.cards[it] }
       val leaderDef = leaderInstance?.let { cardCatalog.get(it.definitionId) }
-
       val atGameStartAbilities = leaderDef?.abilities?.filterIsInstance<ActivatedAbilityDefinition>()
         ?.filter { it.timing == ActivationTiming.AT_GAME_START } ?: emptyList()
 
@@ -855,9 +683,7 @@ class GameEngine private constructor(
       val ability = atGameStartAbilities[progress.abilityIndex]
       val next = if (progress.abilityIndex + 1 < atGameStartAbilities.size) {
         InitialEffectsProgress(progress.playerIndex, progress.abilityIndex + 1)
-      } else {
-        InitialEffectsProgress(progress.playerIndex + 1, 0)
-      }
+      } else InitialEffectsProgress(progress.playerIndex + 1, 0)
 
       advanceInitialEffectsProgress(next, accumulated)
 
@@ -876,23 +702,16 @@ class GameEngine private constructor(
       val autoResult = drainAutomaticWork(accumulated)
       if (autoResult != null) return false
       if (state.pendingChoices.isNotEmpty()) return false
-
       progress = next
     }
-
     return true
   }
 
-  private fun advanceInitialEffectsProgress(
-    progress: InitialEffectsProgress,
-    accumulated: MutableList<GameEvent>,
-  ) {
+  private fun advanceInitialEffectsProgress(progress: InitialEffectsProgress, accumulated: MutableList<GameEvent>) {
     val seq = state.lastEventSequence + 1
     val event = GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.INITIAL_EFFECTS_PROGRESS_CHANGED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.INITIAL_EFFECTS_PROGRESS_CHANGED, sourceCardId = null,
       payload = GameEventPayload.InitialEffectsProgressPayload(progress),
       visibility = EventVisibility.INTERNAL,
     )
@@ -903,10 +722,8 @@ class GameEngine private constructor(
   private fun advanceToOpeningHand(accumulated: MutableList<GameEvent>) {
     val seq1 = state.lastEventSequence + 1
     val openingHandEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq1"),
-      sequence = seq1,
-      type = GameEventType.SETUP_STEP_CHANGED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq1"), sequence = seq1,
+      type = GameEventType.SETUP_STEP_CHANGED, sourceCardId = null,
       payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.INITIAL_EFFECTS, GameSetupStep.OPENING_HAND),
       visibility = EventVisibility.PUBLIC,
     )
@@ -919,21 +736,13 @@ class GameEngine private constructor(
       for (cardId in toDraw) {
         val seq = state.lastEventSequence + 1
         val moveEvent = GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARD_MOVED,
-          sourceCardId = cardId,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.CARD_MOVED, sourceCardId = cardId,
           payload = GameEventPayload.CardMovedPayload(
-            cardId = cardId,
-            fromPlayerId = playerId,
-            fromZone = ZoneType.DECK,
-            toPlayerId = playerId,
-            toZone = ZoneType.HAND,
-            destinationIndex = null,
-            newObjectId = null,
-            orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_DOWN,
-            visibility = CardVisibility.OWNER_ONLY,
+            cardId = cardId, fromPlayerId = playerId, fromZone = ZoneType.DECK,
+            toPlayerId = playerId, toZone = ZoneType.HAND, destinationIndex = null,
+            newObjectId = null, orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN, visibility = CardVisibility.OWNER_ONLY,
           ),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
         )
@@ -943,10 +752,8 @@ class GameEngine private constructor(
       if (toDraw.isNotEmpty()) {
         val seq = state.lastEventSequence + 1
         val drawnEvent = GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARDS_DRAWN,
-          sourceCardId = null,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.CARDS_DRAWN, sourceCardId = null,
           payload = GameEventPayload.CardsDrawnPayload(playerId, toDraw),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
         )
@@ -957,10 +764,8 @@ class GameEngine private constructor(
 
     val seq2 = state.lastEventSequence + 1
     val mulliganEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq2"),
-      sequence = seq2,
-      type = GameEventType.SETUP_STEP_CHANGED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq2"), sequence = seq2,
+      type = GameEventType.SETUP_STEP_CHANGED, sourceCardId = null,
       payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.OPENING_HAND, GameSetupStep.MULLIGAN),
       visibility = EventVisibility.PUBLIC,
     )
@@ -971,10 +776,8 @@ class GameEngine private constructor(
   private fun advanceToLife(accumulated: MutableList<GameEvent>) {
     val seq1 = state.lastEventSequence + 1
     val lifeStepEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq1"),
-      sequence = seq1,
-      type = GameEventType.SETUP_STEP_CHANGED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq1"), sequence = seq1,
+      type = GameEventType.SETUP_STEP_CHANGED, sourceCardId = null,
       payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.MULLIGAN, GameSetupStep.LIFE),
       visibility = EventVisibility.PUBLIC,
     )
@@ -989,21 +792,13 @@ class GameEngine private constructor(
       for (cardId in toDraw) {
         val seq = state.lastEventSequence + 1
         val moveEvent = GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARD_MOVED,
-          sourceCardId = cardId,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.CARD_MOVED, sourceCardId = cardId,
           payload = GameEventPayload.CardMovedPayload(
-            cardId = cardId,
-            fromPlayerId = playerId,
-            fromZone = ZoneType.DECK,
-            toPlayerId = playerId,
-            toZone = ZoneType.LIFE,
-            destinationIndex = null,
-            newObjectId = null,
-            orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_DOWN,
-            visibility = CardVisibility.OWNER_ONLY,
+            cardId = cardId, fromPlayerId = playerId, fromZone = ZoneType.DECK,
+            toPlayerId = playerId, toZone = ZoneType.LIFE, destinationIndex = null,
+            newObjectId = null, orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN, visibility = CardVisibility.OWNER_ONLY,
           ),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
         )
@@ -1013,15 +808,11 @@ class GameEngine private constructor(
       if (toDraw.isNotEmpty()) {
         val seq = state.lastEventSequence + 1
         val lifeChangedEvent = GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.LIFE_CHANGED,
-          sourceCardId = null,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.LIFE_CHANGED, sourceCardId = null,
           payload = GameEventPayload.LifeChangedPayload(
-            playerId = playerId,
-            addedCardIds = toDraw,
-            removedCardIds = emptyList(),
-            destinationZone = null,
+            playerId = playerId, addedCardIds = toDraw,
+            removedCardIds = emptyList(), destinationZone = null,
           ),
           visibility = EventVisibility.PUBLIC,
         )
@@ -1032,10 +823,8 @@ class GameEngine private constructor(
 
     val seq2 = state.lastEventSequence + 1
     val readyEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq2"),
-      sequence = seq2,
-      type = GameEventType.SETUP_STEP_CHANGED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq2"), sequence = seq2,
+      type = GameEventType.SETUP_STEP_CHANGED, sourceCardId = null,
       payload = GameEventPayload.SetupStepChangedPayload(GameSetupStep.LIFE, GameSetupStep.READY),
       visibility = EventVisibility.PUBLIC,
     )
@@ -1044,10 +833,8 @@ class GameEngine private constructor(
 
     val seq3 = state.lastEventSequence + 1
     val startedEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq3"),
-      sequence = seq3,
-      type = GameEventType.GAME_STARTED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq3"), sequence = seq3,
+      type = GameEventType.GAME_STARTED, sourceCardId = null,
       payload = GameEventPayload.GameStartedPayload(state.firstPlayerId),
       visibility = EventVisibility.PUBLIC,
     )
@@ -1061,27 +848,19 @@ class GameEngine private constructor(
     }
   }
 
-  private fun runVmStart(
-    request: ProgramRequest,
-    accumulated: MutableList<GameEvent>,
-  ): CommandResult? {
+  private fun runVmStart(request: ProgramRequest, accumulated: MutableList<GameEvent>): CommandResult? {
     val vmTransition = virtualMachine.start(request.program, request.context, state, request.executionId)
     return applyVmTransition(vmTransition, accumulated)
   }
 
   private fun runVmResume(
-    frame: ProgramFrame,
-    choice: PlayerChoice,
-    accumulated: MutableList<GameEvent>,
+    frame: ProgramFrame, choice: PlayerChoice, accumulated: MutableList<GameEvent>
   ): CommandResult? {
     val vmTransition = virtualMachine.resume(frame, choice, state)
     return applyVmTransition(vmTransition, accumulated)
   }
 
-  private fun applyVmTransition(
-    vmTransition: VmTransition,
-    accumulated: MutableList<GameEvent>,
-  ): CommandResult? {
+  private fun applyVmTransition(vmTransition: VmTransition, accumulated: MutableList<GameEvent>): CommandResult? {
     return when (vmTransition) {
       is VmTransition.VmRunning -> {
         if (vmTransition.events.isNotEmpty()) {
@@ -1114,13 +893,10 @@ class GameEngine private constructor(
         }
         val seq = state.lastEventSequence + 1
         val failEvent = GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.EFFECT_FAILED,
-          sourceCardId = null,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.EFFECT_FAILED, sourceCardId = null,
           payload = GameEventPayload.EffectFailedPayload(
-            effectId = EffectId("${state.id.value}:fail:$seq"),
-            errorCode = vmTransition.error.code,
+            effectId = EffectId("${state.id.value}:fail:$seq"), errorCode = vmTransition.error.code,
           ),
           visibility = EventVisibility.PUBLIC,
         )
@@ -1142,16 +918,11 @@ class GameEngine private constructor(
 
       val newEvents = if (processedEventCount < accumulated.size) {
         accumulated.subList(processedEventCount, accumulated.size).toList()
-      } else {
-        emptyList()
-      }
+      } else emptyList()
       processedEventCount = accumulated.size
 
-      val autoEvents = if (newEvents.isNotEmpty()) {
-        rulesEngine.processEvents(state, newEvents)
-      } else {
-        GameTransition(emptyList(), emptyList())
-      }
+      val autoEvents = if (newEvents.isNotEmpty()) rulesEngine.processEvents(state, newEvents)
+      else GameTransition(emptyList(), emptyList())
       val autoRules = rulesEngine.processAutomaticRules(state)
 
       val hasWork =
@@ -1164,14 +935,12 @@ class GameEngine private constructor(
           state = reducer.apply(state, transition.events)
           accumulated += transition.events
         }
-
         for (request in transition.programsToRun) {
           if (state.pendingChoices.isNotEmpty()) break
           val vmResult = runVmStart(request, accumulated)
           if (vmResult is CommandResult.Failed) return vmResult
           if (state.pendingChoices.isNotEmpty()) break
         }
-
         if (transition.choiceToResume != null && state.pendingChoices.isEmpty()) {
           val choice = transition.choiceToResume
           val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }
@@ -1180,25 +949,17 @@ class GameEngine private constructor(
             if (vmResult is CommandResult.Failed) return vmResult
           }
         }
-
         if (state.pendingChoices.isNotEmpty()) break
       }
     }
 
-    val error = VmError(
-      code = "AUTOMATIC_WORK_LIMIT",
-      message = "Exceeded maximum automatic processing iterations",
-      instructionPointer = 0,
-    )
+    val error = VmError("AUTOMATIC_WORK_LIMIT", "Exceeded maximum automatic processing iterations", 0)
     val seq = state.lastEventSequence + 1
     val failEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.EFFECT_FAILED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.EFFECT_FAILED, sourceCardId = null,
       payload = GameEventPayload.EffectFailedPayload(
-        effectId = EffectId("${state.id.value}:auto-limit:$seq"),
-        errorCode = error.code,
+        effectId = EffectId("${state.id.value}:auto-limit:$seq"), errorCode = error.code,
       ),
       visibility = EventVisibility.PUBLIC,
     )
@@ -1209,57 +970,36 @@ class GameEngine private constructor(
 
   private fun buildEntry(command: GameCommand?, events: List<GameEvent>): GameLogEntry {
     val lastSequence = history.log!!.entries.lastOrNull()?.sequence ?: 0L
-    return GameLogEntry(
-      sequence = lastSequence + 1,
-      command = command,
-      events = events,
-    )
+    return GameLogEntry(sequence = lastSequence + 1, command = command, events = events)
   }
 
   private fun recordAutoEntry(events: List<GameEvent>) {
     if (events.isEmpty()) return
-    val entry = buildEntry(null, events)
-    history.append(entry)
+    history.append(buildEntry(null, events))
   }
 
-  private fun isSetupCommand(command: GameCommand, setup: GameSetupState): Boolean {
-    return when (command) {
-      is ResolveMulliganCommand -> setup.step == GameSetupStep.MULLIGAN
-      is SubmitChoiceCommand -> true
-      is ConcedeCommand -> true
-      else -> false
-    }
+  private fun isSetupCommand(command: GameCommand, setup: GameSetupState): Boolean = when (command) {
+    is ResolveMulliganCommand -> setup.step == GameSetupStep.MULLIGAN
+    is SubmitChoiceCommand -> true
+    is ConcedeCommand -> true
+    else -> false
   }
 
   private fun buildPublicView(targetPlayerId: PlayerId, viewerId: PlayerId): PlayerPublicView {
     val player = state.players[targetPlayerId] ?: return PlayerPublicView(
-      playerId = targetPlayerId,
-      leader = null,
-      characters = emptyList(),
-      stage = null,
-      lifeCount = 0,
-      trash = emptyList(),
-      deckCount = 0,
-      costDon = emptyList(),
-      attachedDon = emptyMap(),
+      targetPlayerId, null, emptyList(), null, 0, emptyList(), 0, emptyList(), emptyMap(),
     )
-
     val leaderCardId = player.leader.cards.firstOrNull()
     val leaderView = leaderCardId?.let { buildCardView(it, viewerId, authorized = true) }
-
     val characterViews = player.characters.cards.map { buildCardView(it, viewerId, authorized = true) }
-
     val stageCardId = player.stage.cards.firstOrNull()
     val stageView = stageCardId?.let { buildCardView(it, viewerId, authorized = true) }
-
     val trashViews = player.trash.cards.map { cardId ->
       val card = state.cards[cardId]
       val revealed = card != null && isVisibleTo(card.visibility, viewerId, card.ownerId)
       buildCardView(cardId, viewerId, authorized = revealed)
     }
-
     val costDonViews = player.cost.cards.map { buildCardView(it, viewerId, authorized = true) }
-
     val attachedDonMap = state.donAttachments.filter { attachment ->
       val host = state.cards[attachment.hostCardId]
       host != null && (host.ownerId == targetPlayerId || rulesEngine.effectiveController(
@@ -1268,42 +1008,26 @@ class GameEngine private constructor(
     }.associate { it.hostCardId to it.donCardIds.size }
 
     return PlayerPublicView(
-      playerId = targetPlayerId,
-      leader = leaderView,
-      characters = characterViews,
-      stage = stageView,
-      lifeCount = player.life.cards.size,
-      trash = trashViews,
-      deckCount = player.deck.cards.size,
-      costDon = costDonViews,
-      attachedDon = attachedDonMap,
+      playerId = targetPlayerId, leader = leaderView, characters = characterViews,
+      stage = stageView, lifeCount = player.life.cards.size, trash = trashViews,
+      deckCount = player.deck.cards.size, costDon = costDonViews, attachedDon = attachedDonMap,
     )
   }
 
   private fun buildCardView(cardId: CardInstanceId, viewerId: PlayerId, authorized: Boolean): CardView {
     val card = state.cards[cardId] ?: return CardView(
-      id = null,
-      definition = null,
-      controllerId = null,
-      orientation = CardOrientation.NOT_APPLICABLE,
-      faceState = FaceState.FACE_DOWN,
-      characteristics = null,
-      attachedDonCount = 0,
+      null, null, null, CardOrientation.NOT_APPLICABLE, FaceState.FACE_DOWN, null, 0,
     )
-
     val canSeeIdentity = authorized && isVisibleTo(card.visibility, viewerId, card.ownerId)
     val definition = if (canSeeIdentity) cardCatalog.get(card.definitionId) else null
     val characteristics = if (canSeeIdentity) rulesEngine.effectiveCharacteristics(state, cardId) else null
     val donCount = state.donAttachments.firstOrNull { it.hostCardId == cardId }?.donCardIds?.size ?: 0
-
     return CardView(
       id = if (canSeeIdentity) cardId else null,
       definition = definition,
       controllerId = if (canSeeIdentity) rulesEngine.effectiveController(state, cardId) ?: card.controllerId else null,
-      orientation = card.orientation,
-      faceState = card.faceState,
-      characteristics = characteristics,
-      attachedDonCount = donCount,
+      orientation = card.orientation, faceState = card.faceState,
+      characteristics = characteristics, attachedDonCount = donCount,
     )
   }
 
@@ -1316,7 +1040,7 @@ class GameEngine private constructor(
 
   private fun collectPublicEvents(viewerId: PlayerId): List<GameEvent> {
     val log = history.log ?: return emptyList()
-    val allEvents = (log.initialEvents + log.entries.flatMap { it.events })
+    val allEvents = log.initialEvents + log.entries.flatMap { it.events }
     return allEvents.filter { event ->
       when (val vis = event.visibility) {
         is EventVisibility.PUBLIC -> true
@@ -1335,7 +1059,6 @@ class GameEngine private constructor(
 
 object GameSerialization {
   const val FORMAT_VERSION = 1
-
   private val json = Json {
     encodeDefaults = true
     ignoreUnknownKeys = false
@@ -1358,9 +1081,7 @@ object GameSerialization {
   }
 
   fun encodeLog(log: GameLog): String = encode(GameLog.serializer(), log)
-
   fun decodeLog(raw: String): GameLog = decode(GameLog.serializer(), raw)
-
   fun decodeLog(raw: String, expectedManifest: GameManifest): GameLog {
     val log = decodeLog(raw)
     require(log.manifest == expectedManifest) {
@@ -1370,22 +1091,13 @@ object GameSerialization {
   }
 
   fun encodeSnapshot(snapshot: GameSnapshot): String = encode(GameSnapshot.serializer(), snapshot)
-
   fun decodeSnapshot(raw: String): GameSnapshot = decode(GameSnapshot.serializer(), raw)
-
   fun encodeEntry(entry: GameLogEntry): String = encode(GameLogEntry.serializer(), entry)
-
   fun decodeEntry(raw: String): GameLogEntry = decode(GameLogEntry.serializer(), raw)
-
   fun encodeState(state: GameState): String = encode(GameState.serializer(), state)
-
   fun decodeState(raw: String): GameState = decode(GameState.serializer(), raw)
-
   fun encodeFrame(frame: ProgramFrame): String = encode(ProgramFrame.serializer(), frame)
-
   fun decodeFrame(raw: String): ProgramFrame = decode(ProgramFrame.serializer(), raw)
-
   fun encodeChoice(choice: PendingChoice): String = encode(PendingChoice.serializer(), choice)
-
   fun decodeChoice(raw: String): PendingChoice = decode(PendingChoice.serializer(), raw)
 }

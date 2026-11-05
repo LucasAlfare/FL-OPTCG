@@ -36,15 +36,10 @@ class FLTurnsAdapter(
   }
 
   suspend fun executeNextOpportunity(): Execution = turnsEngine.executeNextTurn()
-
   fun currentOpportunity(): Opportunity? = coordinator.next()
-
   fun isFinished(): Boolean = coordinator.isEnded()
-
   fun turnsSnapshot(): TurnsSnapshot = turnsEngine.snapshot()
-
   fun snapshot(): GameSnapshot = engine.snapshot()
-
   fun view(playerId: PlayerId): PlayerView = engine.view(playerId)
 
   private suspend fun handleTurn(context: TurnContext): FlowDecision {
@@ -74,14 +69,9 @@ class FLTurnsAdapter(
   )
 }
 
-enum class OpportunityKind {
-  SETUP, CHOICE, TURN, RESPONSE,
-}
+enum class OpportunityKind { SETUP, CHOICE, TURN, RESPONSE }
 
-data class Opportunity(
-  val playerId: PlayerId,
-  val kind: OpportunityKind,
-)
+data class Opportunity(val playerId: PlayerId, val kind: OpportunityKind)
 
 internal class OpportunityCoordinator(private val players: List<PlayerId>) {
   private var state: GameState? = null
@@ -109,20 +99,16 @@ internal class OpportunityCoordinator(private val players: List<PlayerId>) {
 
     current.battle?.let { battle ->
       if (battle.step == BattleStep.BLOCK || battle.step == BattleStep.COUNTER) {
-        val attackerController = current.cards[battle.attackerId]?.controllerId
-        if (attackerController != null) {
-          val defender = players.firstOrNull { it != attackerController }
-          if (defender != null) {
-            return Opportunity(defender, OpportunityKind.RESPONSE)
-          }
+        val defender = when (val target = battle.currentTarget) {
+          is BattleTarget.CardTarget -> current.cards[target.cardInstanceId]?.controllerId
+          is BattleTarget.PlayerTarget -> target.playerId
         }
+        if (defender != null) return Opportunity(defender, OpportunityKind.RESPONSE)
       }
     }
 
     current.turn?.let { turn ->
-      if (turn.phase == GamePhase.MAIN) {
-        return Opportunity(turn.playerId, OpportunityKind.TURN)
-      }
+      if (turn.phase == GamePhase.MAIN) return Opportunity(turn.playerId, OpportunityKind.TURN)
     }
 
     return null
@@ -140,9 +126,7 @@ internal class OpportunityCoordinator(private val players: List<PlayerId>) {
   }
 }
 
-internal class OpcgTurnFlow(
-  private val coordinator: OpportunityCoordinator,
-) : TurnFlow {
+internal class OpcgTurnFlow(private val coordinator: OpportunityCoordinator) : TurnFlow {
   private var counter: Long = 0L
 
   override fun next(isEligible: (Turn) -> Boolean): Turn {

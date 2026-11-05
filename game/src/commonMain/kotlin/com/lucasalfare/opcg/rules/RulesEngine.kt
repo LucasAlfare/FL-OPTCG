@@ -2,9 +2,7 @@ package com.lucasalfare.opcg.rules
 
 import com.lucasalfare.opcg.*
 
-class RulesEngine(
-  private val cardCatalog: CardCatalog,
-) : InstructionExecutor, ProgramEvaluator {
+class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, ProgramEvaluator {
 
   private val turnController = TurnController()
   private val mainPhaseController = MainPhaseController()
@@ -26,6 +24,12 @@ class RulesEngine(
     if (state.status == GameStatus.FINISHED) {
       return ValidationResult(false, listOf(RuleViolation("GAME_FINISHED", "Game is finished")))
     }
+    if (state.battle != null && isMainPhaseCommand(command)) {
+      return ValidationResult(
+        false,
+        listOf(RuleViolation("BATTLE_IN_PROGRESS", "Main phase actions are not allowed during a battle")),
+      )
+    }
     return when (command) {
       is PlayCardCommand -> mainPhaseController.validatePlayCard(state, command, cardCatalog, continuousEffectProcessor)
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
@@ -45,11 +49,14 @@ class RulesEngine(
     }
   }
 
+  private fun isMainPhaseCommand(command: GameCommand): Boolean = when (command) {
+    is PlayCardCommand, is GiveDonCommand, is EndMainPhaseCommand -> true
+    else -> false
+  }
+
   fun process(state: GameState, command: GameCommand): GameTransition {
     val validation = validate(state, command)
-    if (!validation.valid) {
-      return GameTransition(events = emptyList(), programsToRun = emptyList())
-    }
+    if (!validation.valid) return GameTransition(events = emptyList(), programsToRun = emptyList())
     return when (command) {
       is PlayCardCommand -> mainPhaseController.processPlayCard(
         state, command, cardCatalog, continuousEffectProcessor, costProcessor, this
@@ -64,7 +71,6 @@ class RulesEngine(
       )
 
       is PassBattleStepCommand -> advanceBattleStep(state)
-
       is UseCharacterCounterCommand -> battleResolver.processCharacterCounter(state, command, continuousEffectProcessor)
       is UseEventCounterCommand -> battleResolver.processEventCounter(
         state, command, continuousEffectProcessor, costProcessor, this
@@ -76,42 +82,30 @@ class RulesEngine(
     }
   }
 
-  fun advanceBattleStep(state: GameState): GameTransition {
-    return battleResolver.advanceStep(state, continuousEffectProcessor, damageProcessor, this)
-  }
+  fun advanceBattleStep(state: GameState): GameTransition =
+    battleResolver.advanceStep(state, continuousEffectProcessor, damageProcessor, this)
 
-  fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
-    return effectScheduler.processEvents(state, events, this)
-  }
+  fun processEvents(state: GameState, events: List<GameEvent>): GameTransition =
+    effectScheduler.processEvents(state, events, this)
 
-  fun processAutomaticRules(state: GameState): GameTransition {
-    return ruleProcessor.processRules(state)
-  }
+  fun processAutomaticRules(state: GameState): GameTransition = ruleProcessor.processRules(state)
 
-  fun advancePhase(state: GameState): GameTransition {
-    return turnController.advancePhase(state, continuousEffectProcessor, this)
-  }
+  fun advancePhase(state: GameState): GameTransition =
+    turnController.advancePhase(state, continuousEffectProcessor, this)
 
-  fun startTurn(state: GameState, playerId: PlayerId, turnNumber: Int): GameTransition {
-    return turnController.startTurn(state, playerId, turnNumber, continuousEffectProcessor, this)
-  }
+  fun startTurn(state: GameState, playerId: PlayerId, turnNumber: Int): GameTransition =
+    turnController.startTurn(state, playerId, turnNumber, continuousEffectProcessor, this)
 
-  fun createInitialState(setup: GameSetup): GameCreationResult {
-    return gameFactory.create(setup)
-  }
+  fun createInitialState(setup: GameSetup): GameCreationResult = gameFactory.create(setup)
 
-  fun effectiveCharacteristics(state: GameState, cardId: CardInstanceId): EffectiveCharacteristics? {
-    return continuousEffectProcessor.effectiveCharacteristics(state, cardId)
-  }
+  fun effectiveCharacteristics(state: GameState, cardId: CardInstanceId): EffectiveCharacteristics? =
+    continuousEffectProcessor.effectiveCharacteristics(state, cardId)
 
-  fun effectiveController(state: GameState, cardId: CardInstanceId): PlayerId? {
-    return continuousEffectProcessor.effectiveController(state, cardId)
-  }
+  fun effectiveController(state: GameState, cardId: CardInstanceId): PlayerId? =
+    continuousEffectProcessor.effectiveController(state, cardId)
 
   override fun execute(
-    instruction: Instruction,
-    state: GameState,
-    context: EffectContext,
+    instruction: Instruction, state: GameState, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     return when (instruction) {
@@ -125,9 +119,7 @@ class RulesEngine(
           "INVALID_VALUE", "Expected integer value", 0
         )
         val modifier = Modifier.CharacteristicModifier(
-          instruction.characteristic,
-          instruction.operation,
-          ValueExpr.NumberValue(intValue),
+          instruction.characteristic, instruction.operation, ValueExpr.NumberValue(intValue),
         )
         emitModifiers(state, context, cardIds, modifier, instruction.duration)
       }
@@ -162,18 +154,17 @@ class RulesEngine(
           effects += activeEffect(
             state, context, listOf(cardId), null,
             Modifier.CharacteristicModifier(
-              NumericCharacteristic.POWER,
-              NumericOperation.SUBTRACT,
-              ValueExpr.NumberValue(power),
+              NumericCharacteristic.POWER, NumericOperation.SUBTRACT, ValueExpr.NumberValue(power)
             ),
-            instruction.duration,
-            seq,
+            instruction.duration, seq,
           )
         }
         InstructionExecutionResult.Completed(
           null,
           effects.mapIndexed { index, effect ->
-            modifierAddedEvent(state, effect, state.lastEventSequence + 1 + index)
+            modifierAddedEvent(
+              state, effect, state.lastEventSequence + 1 + index
+            )
           },
         )
       }
@@ -183,9 +174,11 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
+          state,
+          context,
+          cardIds,
           Modifier.PropertyModifier(instruction.property, instruction.value),
-          instruction.duration,
+          instruction.duration
         )
       }
 
@@ -206,17 +199,22 @@ class RulesEngine(
             val value = propertyValueFrom(sourceChars, property) ?: continue
             seq += 1
             effects += activeEffect(
-              state, context, listOf(cardId), null,
+              state,
+              context,
+              listOf(cardId),
+              null,
               Modifier.PropertyModifier(property, value),
               instruction.duration,
-              seq,
+              seq
             )
           }
         }
         InstructionExecutionResult.Completed(
           null,
           effects.mapIndexed { index, effect ->
-            modifierAddedEvent(state, effect, state.lastEventSequence + 1 + index)
+            modifierAddedEvent(
+              state, effect, state.lastEventSequence + 1 + index
+            )
           },
         )
       }
@@ -226,9 +224,11 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
+          state,
+          context,
+          cardIds,
           Modifier.KeywordModifier(instruction.keyword, KeywordOperation.ADD),
-          instruction.duration,
+          instruction.duration
         )
       }
 
@@ -237,9 +237,11 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
+          state,
+          context,
+          cardIds,
           Modifier.KeywordModifier(instruction.keyword, KeywordOperation.REMOVE),
-          instruction.duration,
+          instruction.duration
         )
       }
 
@@ -248,9 +250,7 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
-          Modifier.AbilityModifier(instruction.ability, add = true),
-          instruction.duration,
+          state, context, cardIds, Modifier.AbilityModifier(instruction.ability, add = true), instruction.duration
         )
       }
 
@@ -270,17 +270,22 @@ class RulesEngine(
           for (ability in def.abilities) {
             seq += 1
             effects += activeEffect(
-              state, context, listOf(cardId), null,
+              state,
+              context,
+              listOf(cardId),
+              null,
               Modifier.AbilityModifier(ability, add = true),
               instruction.duration,
-              seq,
+              seq
             )
           }
         }
         InstructionExecutionResult.Completed(
           null,
           effects.mapIndexed { index, effect ->
-            modifierAddedEvent(state, effect, state.lastEventSequence + 1 + index)
+            modifierAddedEvent(
+              state, effect, state.lastEventSequence + 1 + index
+            )
           },
         )
       }
@@ -290,9 +295,7 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
-          Modifier.EffectNegationModifier(instruction.scope),
-          instruction.duration,
+          state, context, cardIds, Modifier.EffectNegationModifier(instruction.scope), instruction.duration
         )
       }
 
@@ -301,9 +304,7 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
-          Modifier.ControlModifier(instruction.playerId),
-          instruction.duration,
+          state, context, cardIds, Modifier.ControlModifier(instruction.playerId), instruction.duration
         )
       }
 
@@ -315,10 +316,13 @@ class RulesEngine(
         )
         val seq = state.lastEventSequence + 1
         val effect = activeEffect(
-          state, context, emptyList(), instruction.playerId,
+          state,
+          context,
+          emptyList(),
+          instruction.playerId,
           Modifier.DamagePreventionModifier(instruction.playerId, ValueExpr.NumberValue(amount)),
           instruction.duration,
-          seq,
+          seq
         )
         InstructionExecutionResult.Completed(null, listOf(modifierAddedEvent(state, effect, seq)))
       }
@@ -328,9 +332,7 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
-          Modifier.RestrictionModifier(instruction.restriction),
-          instruction.duration,
+          state, context, cardIds, Modifier.RestrictionModifier(instruction.restriction), instruction.duration
         )
       }
 
@@ -339,19 +341,20 @@ class RulesEngine(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
         emitModifiers(
-          state, context, cardIds,
-          Modifier.PermissionModifier(instruction.permission),
-          instruction.duration,
+          state, context, cardIds, Modifier.PermissionModifier(instruction.permission), instruction.duration
         )
       }
 
       is AddActivationCost -> {
         val seq = state.lastEventSequence + 1
         val effect = activeEffect(
-          state, context, emptyList(), null,
+          state,
+          context,
+          emptyList(),
+          null,
           Modifier.ActivationCostModifier(instruction.selector, instruction.cost),
           instruction.duration,
-          seq,
+          seq
         )
         InstructionExecutionResult.Completed(null, listOf(modifierAddedEvent(state, effect, seq)))
       }
@@ -359,10 +362,13 @@ class RulesEngine(
       is ModifyDeckRule -> {
         val seq = state.lastEventSequence + 1
         val effect = activeEffect(
-          state, context, emptyList(), null,
+          state,
+          context,
+          emptyList(),
+          null,
           Modifier.DeckRuleEffectModifier(instruction.modifier),
           instruction.duration,
-          seq,
+          seq
         )
         InstructionExecutionResult.Completed(null, listOf(modifierAddedEvent(state, effect, seq)))
       }
@@ -370,32 +376,34 @@ class RulesEngine(
       is RegisterReplacement -> {
         val seq = state.lastEventSequence + 1
         val effect = activeEffect(
-          state, context, emptyList(), null,
+          state,
+          context,
+          emptyList(),
+          null,
           Modifier.ReplacementModifier(instruction.definition),
           instruction.definition.duration,
-          seq,
+          seq
         ).copy(id = instruction.definition.id, sourceAbilityId = context.abilityId)
         InstructionExecutionResult.Completed(null, listOf(modifierAddedEvent(state, effect, seq)))
       }
 
       is KnockOut -> damageProcessor.executeKnockOut(
-        state, instruction, context, variables, replacementProcessor, continuousEffectProcessor, cardCatalog
+        state, instruction, context, variables, replacementProcessor, continuousEffectProcessor, cardCatalog,
       )
 
       is DealDamage -> damageProcessor.executeDealDamage(
-        state, instruction, context, variables, this, continuousEffectProcessor
+        state, instruction, context, variables, this, continuousEffectProcessor,
       )
 
       is SetLife -> damageProcessor.executeSetLife(state, instruction, context, variables)
-
       is Draw -> zoneInstructionExecutor.draw(state, instruction, context, variables, this)
       is MoveCards -> zoneInstructionExecutor.moveCards(
-        state, instruction, context, variables, this, informationManager
+        state, instruction, context, variables, this, informationManager,
       )
 
       is TrashFromHand -> zoneInstructionExecutor.trashFromHand(state, instruction, context, variables, this)
       is PlayCard -> zoneInstructionExecutor.playCard(
-        state, instruction, context, variables, cardCatalog, continuousEffectProcessor, costProcessor, this
+        state, instruction, context, variables, cardCatalog, continuousEffectProcessor, costProcessor, this,
       )
 
       is ShuffleZone -> zoneInstructionExecutor.shuffleZone(state, instruction)
@@ -407,9 +415,7 @@ class RulesEngine(
       is DetachDon -> donInstructionExecutor.detachDon(state, instruction, context, variables, this)
       is RestCards -> zoneInstructionExecutor.restCards(state, instruction, context, variables)
       is SetCardState -> zoneInstructionExecutor.setCardState(state, instruction, context, variables)
-
       is ActivateAbility -> effectScheduler.executeActivateInstruction(state, instruction, context, variables, this)
-
       is SelectCards -> executeSelectCards(state, instruction, context, variables)
       is CountCards -> executeCountCards(state, instruction, context, variables)
       is LookAtTop -> executeLookAtTop(state, instruction, context, variables)
@@ -419,7 +425,6 @@ class RulesEngine(
       is OrderCards -> executeOrderCards(state, instruction, context, variables)
       is CheckCondition -> executeCheckCondition(state, instruction, context, variables)
       is SetGameResult -> executeSetGameResult(state, instruction, context)
-
       else -> failExec("UNSUPPORTED_INSTRUCTION", "Instruction not handled: ${instruction::class.simpleName}", 0)
     }
   }
@@ -492,20 +497,15 @@ class RulesEngine(
     val choice = state.pendingChoices.firstOrNull { it.id == command.choiceId } ?: return emptyTransition()
     var seq = state.lastEventSequence
     val events = mutableListOf<GameEvent>()
-
     seq += 1
     events += GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.CHOICE_SUBMITTED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.CHOICE_SUBMITTED, sourceCardId = null,
       payload = GameEventPayload.ChoiceSubmittedPayload(command.playerId, command.choiceId, command.answer),
       visibility = choice.visibility,
     )
-
     return GameTransition(
-      events = events,
-      programsToRun = emptyList(),
+      events = events, programsToRun = emptyList(),
       choiceToResume = PlayerChoice(command.choiceId, command.playerId, command.answer),
     )
   }
@@ -513,13 +513,11 @@ class RulesEngine(
   private fun validateMulligan(state: GameState, command: ResolveMulliganCommand): ValidationResult {
     val setup = state.setup ?: return invalid("NOT_IN_SETUP", "Game is not in setup")
     if (setup.step != GameSetupStep.MULLIGAN) return invalid("NOT_MULLIGAN_STEP", "Not in Mulligan step")
-    if (command.playerId !in setup.pendingMulliganPlayers) {
-      return invalid("NOT_PENDING", "Player is not awaiting mulligan")
-    }
+    if (command.playerId !in setup.pendingMulliganPlayers) return invalid(
+      "NOT_PENDING", "Player is not awaiting mulligan"
+    )
     val player = state.players[command.playerId] ?: return invalid("UNKNOWN_PLAYER", "Player not found")
-    if (player.hand.cards.size != 5) {
-      return invalid("INVALID_HAND", "Mulligan requires exactly 5 cards in hand")
-    }
+    if (player.hand.cards.size != 5) return invalid("INVALID_HAND", "Mulligan requires exactly 5 cards in hand")
     return ValidationResult(true, emptyList())
   }
 
@@ -534,64 +532,41 @@ class RulesEngine(
       for (cardId in returned) {
         seq += 1
         events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARD_MOVED,
-          sourceCardId = cardId,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.CARD_MOVED, sourceCardId = cardId,
           payload = GameEventPayload.CardMovedPayload(
-            cardId = cardId,
-            fromPlayerId = command.playerId,
-            fromZone = ZoneType.HAND,
-            toPlayerId = command.playerId,
-            toZone = ZoneType.DECK,
-            destinationIndex = null,
-            newObjectId = null,
-            orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_DOWN,
-            visibility = CardVisibility.OWNER_ONLY,
+            cardId = cardId, fromPlayerId = command.playerId, fromZone = ZoneType.HAND,
+            toPlayerId = command.playerId, toZone = ZoneType.DECK, destinationIndex = null,
+            newObjectId = null, orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN, visibility = CardVisibility.OWNER_ONLY,
           ),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(command.playerId),
         )
       }
-
       val deckAfter = player.deck.cards + returned
       val (shuffled, randomAfter) = RandomSupport.fisherYates(deckAfter.toMutableList(), randomState)
       randomState = randomAfter
-
       seq += 1
       events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.DECK_SHUFFLED,
-        sourceCardId = null,
+        id = EventId("${state.id.value}:$seq"), sequence = seq,
+        type = GameEventType.DECK_SHUFFLED, sourceCardId = null,
         payload = GameEventPayload.DeckShuffledPayload(
-          playerId = command.playerId,
-          zone = ZoneType.DECK,
-          resultingOrder = shuffled,
-          randomStateAfter = randomState,
+          playerId = command.playerId, zone = ZoneType.DECK,
+          resultingOrder = shuffled, randomStateAfter = randomState,
         ),
         visibility = EventVisibility.PUBLIC,
       )
-
       val drawn = shuffled.take(minOf(5, shuffled.size))
       for (cardId in drawn) {
         seq += 1
         events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARD_MOVED,
-          sourceCardId = cardId,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.CARD_MOVED, sourceCardId = cardId,
           payload = GameEventPayload.CardMovedPayload(
-            cardId = cardId,
-            fromPlayerId = command.playerId,
-            fromZone = ZoneType.DECK,
-            toPlayerId = command.playerId,
-            toZone = ZoneType.HAND,
-            destinationIndex = null,
-            newObjectId = null,
-            orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_DOWN,
-            visibility = CardVisibility.OWNER_ONLY,
+            cardId = cardId, fromPlayerId = command.playerId, fromZone = ZoneType.DECK,
+            toPlayerId = command.playerId, toZone = ZoneType.HAND, destinationIndex = null,
+            newObjectId = null, orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN, visibility = CardVisibility.OWNER_ONLY,
           ),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(command.playerId),
         )
@@ -599,10 +574,8 @@ class RulesEngine(
       if (drawn.isNotEmpty()) {
         seq += 1
         events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARDS_DRAWN,
-          sourceCardId = null,
+          id = EventId("${state.id.value}:$seq"), sequence = seq,
+          type = GameEventType.CARDS_DRAWN, sourceCardId = null,
           payload = GameEventPayload.CardsDrawnPayload(command.playerId, drawn),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(command.playerId),
         )
@@ -611,18 +584,13 @@ class RulesEngine(
 
     seq += 1
     events += GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.MULLIGAN_RESOLVED,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.MULLIGAN_RESOLVED, sourceCardId = null,
       payload = GameEventPayload.MulliganResolvedPayload(
-        playerId = command.playerId,
-        redrawn = command.redraw,
-        returnedCardIds = returned,
+        playerId = command.playerId, redrawn = command.redraw, returnedCardIds = returned,
       ),
       visibility = EventVisibility.PUBLIC,
     )
-
     return GameTransition(events = events, programsToRun = emptyList())
   }
 
@@ -630,34 +598,25 @@ class RulesEngine(
     val opponent = state.playerOrder.firstOrNull { it != command.playerId } ?: return emptyTransition()
     var seq = state.lastEventSequence
     val events = mutableListOf<GameEvent>()
-
     seq += 1
     events += GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.PLAYER_LOST,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.PLAYER_LOST, sourceCardId = null,
       payload = GameEventPayload.PlayerLostPayload(command.playerId, GameEndReason.CONCESSION),
       visibility = EventVisibility.PUBLIC,
     )
-
     seq += 1
     events += GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.PLAYER_WON,
-      sourceCardId = null,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.PLAYER_WON, sourceCardId = null,
       payload = GameEventPayload.PlayerWonPayload(opponent, GameEndReason.CONCESSION),
       visibility = EventVisibility.PUBLIC,
     )
-
     return GameTransition(events = events, programsToRun = emptyList())
   }
 
   private fun evaluateInt(
-    expr: ValueExpr,
-    state: GameState,
-    context: EffectContext,
+    expr: ValueExpr, state: GameState, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): Int? {
     return when (val r = evaluateValue(expr, state, context, variables)) {
@@ -667,9 +626,7 @@ class RulesEngine(
   }
 
   private fun executeSelectCards(
-    state: GameState,
-    instruction: SelectCards,
-    context: EffectContext,
+    state: GameState, instruction: SelectCards, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val candidates = when (val r = selectCards(instruction.selector, state, context, variables)) {
@@ -680,11 +637,9 @@ class RulesEngine(
     val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: candidates.size
     val choice = PendingChoice(
       id = ChoiceId("${state.id.value}:sel:${state.lastEventSequence + 1}"),
-      playerId = instruction.playerId,
-      frameId = ExecutionId("pending"),
+      playerId = instruction.playerId, frameId = ExecutionId("pending"),
       type = ChoiceType.CARD_SELECTION,
-      minimum = minVal.coerceAtLeast(0),
-      maximum = maxVal.coerceAtLeast(minVal),
+      minimum = minVal.coerceAtLeast(0), maximum = maxVal.coerceAtLeast(minVal),
       candidates = candidates.map { ChoiceCandidate.CardCandidate(it) },
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
@@ -692,25 +647,18 @@ class RulesEngine(
   }
 
   private fun executeCountCards(
-    state: GameState,
-    instruction: CountCards,
-    context: EffectContext,
+    state: GameState, instruction: CountCards, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val candidates = when (val r = selectCards(instruction.selector, state, context, variables)) {
       is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
       is EvaluationResult.Success -> r.value
     }
-    return InstructionExecutionResult.Completed(
-      StoredValue.IntegerValue(candidates.size),
-      emptyList(),
-    )
+    return InstructionExecutionResult.Completed(StoredValue.IntegerValue(candidates.size), emptyList())
   }
 
   private fun executeLookAtTop(
-    state: GameState,
-    instruction: LookAtTop,
-    context: EffectContext,
+    state: GameState, instruction: LookAtTop, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val amount = evaluateInt(instruction.amount, state, context, variables) ?: 0
@@ -723,23 +671,16 @@ class RulesEngine(
     }
     val seq = state.lastEventSequence + 1
     val event = GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.CARD_REVEALED,
-      sourceCardId = context.sourceCardId,
-      payload = GameEventPayload.CardRevealedPayload(
-        cards,
-        CardVisibility.PLAYERS(setOf(instruction.playerId)),
-      ),
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.CARD_REVEALED, sourceCardId = context.sourceCardId,
+      payload = GameEventPayload.CardRevealedPayload(cards, CardVisibility.PLAYERS(setOf(instruction.playerId))),
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
     return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(cards), listOf(event))
   }
 
   private fun executeRevealCards(
-    state: GameState,
-    instruction: RevealCards,
-    context: EffectContext,
+    state: GameState, instruction: RevealCards, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val cardIds = when (val v = variables[instruction.source]) {
@@ -748,7 +689,6 @@ class RulesEngine(
       else -> return failExec("INVALID_SOURCE", "RevealCards requires card ids", 0)
     }
     if (cardIds.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
-
     val isPublic = Viewer.ALL_PLAYERS in instruction.viewers
     val viewers = mutableSetOf<PlayerId>()
     for (viewer in instruction.viewers) {
@@ -756,20 +696,15 @@ class RulesEngine(
         Viewer.ALL_PLAYERS -> Unit
         Viewer.SOURCE_CONTROLLER -> viewers += context.controllerId
         Viewer.OPPONENT -> state.playerOrder.firstOrNull { it != context.controllerId }?.let { viewers += it }
-        Viewer.OWNER -> cardIds.forEach { id ->
-          state.cards[id]?.let { viewers += it.ownerId }
-        }
+        Viewer.OWNER -> cardIds.forEach { id -> state.cards[id]?.let { viewers += it.ownerId } }
       }
     }
     val cardVisibility = if (isPublic) CardVisibility.PUBLIC else CardVisibility.PLAYERS(viewers)
     val eventVisibility = if (isPublic) EventVisibility.PUBLIC else EventVisibility.PRIVATE_TO_PLAYERS(viewers)
-
     val seq = state.lastEventSequence + 1
     val event = GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.CARD_REVEALED,
-      sourceCardId = context.sourceCardId,
+      id = EventId("${state.id.value}:$seq"), sequence = seq,
+      type = GameEventType.CARD_REVEALED, sourceCardId = context.sourceCardId,
       payload = GameEventPayload.CardRevealedPayload(cardIds, cardVisibility),
       visibility = eventVisibility,
     )
@@ -777,18 +712,13 @@ class RulesEngine(
   }
 
   private fun executeChooseOption(
-    state: GameState,
-    instruction: ChooseOption,
-    context: EffectContext,
+    state: GameState, instruction: ChooseOption, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val choice = PendingChoice(
       id = ChoiceId("${state.id.value}:opt:${state.lastEventSequence + 1}"),
-      playerId = instruction.playerId,
-      frameId = ExecutionId("pending"),
-      type = ChoiceType.OPTION,
-      minimum = 1,
-      maximum = 1,
+      playerId = instruction.playerId, frameId = ExecutionId("pending"),
+      type = ChoiceType.OPTION, minimum = 1, maximum = 1,
       candidates = instruction.options.map { ChoiceCandidate.OptionCandidate(it) },
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
@@ -796,20 +726,15 @@ class RulesEngine(
   }
 
   private fun executeChooseNumber(
-    state: GameState,
-    instruction: ChooseNumber,
-    context: EffectContext,
+    state: GameState, instruction: ChooseNumber, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: 0
     val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: minVal
     val choice = PendingChoice(
       id = ChoiceId("${state.id.value}:num:${state.lastEventSequence + 1}"),
-      playerId = instruction.playerId,
-      frameId = ExecutionId("pending"),
-      type = ChoiceType.NUMBER,
-      minimum = minVal,
-      maximum = maxVal,
+      playerId = instruction.playerId, frameId = ExecutionId("pending"),
+      type = ChoiceType.NUMBER, minimum = minVal, maximum = maxVal,
       candidates = (minVal..maxVal).map { ChoiceCandidate.NumberCandidate(it) },
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
@@ -817,9 +742,7 @@ class RulesEngine(
   }
 
   private fun executeOrderCards(
-    state: GameState,
-    instruction: OrderCards,
-    context: EffectContext,
+    state: GameState, instruction: OrderCards, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     val cardIds = when (val v = variables[instruction.source]) {
@@ -832,11 +755,8 @@ class RulesEngine(
     }
     val choice = PendingChoice(
       id = ChoiceId("${state.id.value}:order:${state.lastEventSequence + 1}"),
-      playerId = instruction.playerId,
-      frameId = ExecutionId("pending"),
-      type = ChoiceType.CARD_ORDER,
-      minimum = cardIds.size,
-      maximum = cardIds.size,
+      playerId = instruction.playerId, frameId = ExecutionId("pending"),
+      type = ChoiceType.CARD_ORDER, minimum = cardIds.size, maximum = cardIds.size,
       candidates = cardIds.map { ChoiceCandidate.CardCandidate(it) },
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
@@ -844,24 +764,19 @@ class RulesEngine(
   }
 
   private fun executeCheckCondition(
-    state: GameState,
-    instruction: CheckCondition,
-    context: EffectContext,
+    state: GameState, instruction: CheckCondition, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
     return when (val r = evaluateCondition(instruction.condition, state, context, variables)) {
       is EvaluationResult.Failed -> InstructionExecutionResult.Failed(r.error)
       is EvaluationResult.Success -> InstructionExecutionResult.Completed(
-        StoredValue.BooleanValue(r.value),
-        emptyList(),
+        StoredValue.BooleanValue(r.value), emptyList()
       )
     }
   }
 
   private fun executeSetGameResult(
-    state: GameState,
-    instruction: SetGameResult,
-    context: EffectContext,
+    state: GameState, instruction: SetGameResult, context: EffectContext,
   ): InstructionExecutionResult {
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
@@ -870,10 +785,8 @@ class RulesEngine(
     if (result.reason == GameEndReason.DRAW || (result.winnerId == null && result.loserIds.isEmpty())) {
       seq += 1
       events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.GAME_DRAWN,
-        sourceCardId = context.sourceCardId,
+        id = EventId("${state.id.value}:$seq"), sequence = seq,
+        type = GameEventType.GAME_DRAWN, sourceCardId = context.sourceCardId,
         payload = GameEventPayload.GameDrawnPayload(state.players.keys, result.reason),
         visibility = EventVisibility.PUBLIC,
       )
@@ -883,10 +796,8 @@ class RulesEngine(
     result.winnerId?.let { winner ->
       seq += 1
       events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.PLAYER_WON,
-        sourceCardId = context.sourceCardId,
+        id = EventId("${state.id.value}:$seq"), sequence = seq,
+        type = GameEventType.PLAYER_WON, sourceCardId = context.sourceCardId,
         payload = GameEventPayload.PlayerWonPayload(winner, result.reason),
         visibility = EventVisibility.PUBLIC,
       )
@@ -894,10 +805,8 @@ class RulesEngine(
     for (loser in result.loserIds) {
       seq += 1
       events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.PLAYER_LOST,
-        sourceCardId = context.sourceCardId,
+        id = EventId("${state.id.value}:$seq"), sequence = seq,
+        type = GameEventType.PLAYER_LOST, sourceCardId = context.sourceCardId,
         payload = GameEventPayload.PlayerLostPayload(loser, result.reason),
         visibility = EventVisibility.PUBLIC,
       )
@@ -906,11 +815,8 @@ class RulesEngine(
   }
 
   private fun emitModifiers(
-    state: GameState,
-    context: EffectContext,
-    cardIds: List<CardInstanceId>,
-    modifier: Modifier,
-    duration: Duration,
+    state: GameState, context: EffectContext, cardIds: List<CardInstanceId>,
+    modifier: Modifier, duration: Duration,
   ): InstructionExecutionResult {
     if (cardIds.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
     val effects = cardIds.mapIndexed { index, cardId ->
@@ -923,42 +829,28 @@ class RulesEngine(
   }
 
   private fun activeEffect(
-    state: GameState,
-    context: EffectContext,
-    targetCardIds: List<CardInstanceId>,
-    targetPlayerId: PlayerId?,
-    modifier: Modifier,
-    duration: Duration,
-    sequence: Long,
+    state: GameState, context: EffectContext, targetCardIds: List<CardInstanceId>,
+    targetPlayerId: PlayerId?, modifier: Modifier, duration: Duration, sequence: Long,
   ): ActiveEffect {
     return ActiveEffect(
       id = EffectId("${state.id.value}:effect:$sequence"),
-      sourceCardId = context.sourceCardId,
-      sourceAbilityId = context.abilityId,
-      controllerId = context.controllerId,
-      targetCardIds = targetCardIds,
-      targetPlayerId = targetPlayerId,
-      modifier = modifier,
-      duration = duration,
-      timestampSequence = sequence,
+      sourceCardId = context.sourceCardId, sourceAbilityId = context.abilityId,
+      controllerId = context.controllerId, targetCardIds = targetCardIds,
+      targetPlayerId = targetPlayerId, modifier = modifier,
+      duration = duration, timestampSequence = sequence,
     )
   }
 
   private fun modifierAddedEvent(state: GameState, effect: ActiveEffect, sequence: Long): GameEvent {
     return GameEvent(
-      id = EventId("${state.id.value}:$sequence"),
-      sequence = sequence,
-      type = GameEventType.MODIFIER_ADDED,
-      sourceCardId = effect.sourceCardId,
+      id = EventId("${state.id.value}:$sequence"), sequence = sequence,
+      type = GameEventType.MODIFIER_ADDED, sourceCardId = effect.sourceCardId,
       payload = GameEventPayload.ModifierAddedPayload(effect),
       visibility = EventVisibility.PUBLIC,
     )
   }
 
-  private fun resolveSourceCards(
-    source: VariableId,
-    variables: Map<VariableId, StoredValue>,
-  ): List<CardInstanceId>? {
+  private fun resolveSourceCards(source: VariableId, variables: Map<VariableId, StoredValue>): List<CardInstanceId>? {
     return when (val value = variables[source]) {
       is StoredValue.CardIdsValue -> value.value
       is StoredValue.CardValue -> listOf(value.value)
@@ -967,10 +859,7 @@ class RulesEngine(
     }
   }
 
-  private fun resolveCardReference(
-    reference: CardReference,
-    variables: Map<VariableId, StoredValue>,
-  ): CardInstanceId? {
+  private fun resolveCardReference(reference: CardReference, variables: Map<VariableId, StoredValue>): CardInstanceId? {
     reference.instanceId?.let { return it }
     val variableId = reference.variableId ?: return null
     return when (val value = variables[variableId]) {
@@ -980,25 +869,21 @@ class RulesEngine(
     }
   }
 
-  private fun propertyValueFrom(
-    chars: EffectiveCharacteristics,
-    property: CardProperty,
-  ): PropertyValue? = when (property) {
-    CardProperty.NAME -> PropertyValue.StringValue(chars.name)
-    CardProperty.COLOR -> PropertyValue.ColorSetValue(chars.colors)
-    CardProperty.TYPE -> PropertyValue.TypeSetValue(chars.types)
-    CardProperty.ATTRIBUTE -> PropertyValue.AttributeSetValue(chars.attributes)
-    CardProperty.KEYWORDS -> PropertyValue.KeywordSetValue(chars.keywords)
-  }
+  private fun propertyValueFrom(chars: EffectiveCharacteristics, property: CardProperty): PropertyValue? =
+    when (property) {
+      CardProperty.NAME -> PropertyValue.StringValue(chars.name)
+      CardProperty.COLOR -> PropertyValue.ColorSetValue(chars.colors)
+      CardProperty.TYPE -> PropertyValue.TypeSetValue(chars.types)
+      CardProperty.ATTRIBUTE -> PropertyValue.AttributeSetValue(chars.attributes)
+      CardProperty.KEYWORDS -> PropertyValue.KeywordSetValue(chars.keywords)
+    }
 
   @Suppress("SameParameterValue")
-  private fun failExec(code: String, message: String, pointer: Int): InstructionExecutionResult.Failed {
-    return InstructionExecutionResult.Failed(VmError(code, message, pointer))
-  }
+  private fun failExec(code: String, message: String, pointer: Int): InstructionExecutionResult.Failed =
+    InstructionExecutionResult.Failed(VmError(code, message, pointer))
 
-  private fun EvaluationResult.Failed.asExecution(): InstructionExecutionResult.Failed {
-    return InstructionExecutionResult.Failed(error)
-  }
+  private fun EvaluationResult.Failed.asExecution(): InstructionExecutionResult.Failed =
+    InstructionExecutionResult.Failed(error)
 
   private fun StoredValue.asInt(): Int? = when (this) {
     is StoredValue.IntegerValue -> value
@@ -1007,15 +892,11 @@ class RulesEngine(
   }
 
   override fun evaluateValue(
-    expression: ValueExpr,
-    state: GameState,
-    context: EffectContext,
-    variables: Map<VariableId, StoredValue>,
-    candidateCardId: CardInstanceId?,
+    expression: ValueExpr, state: GameState, context: EffectContext,
+    variables: Map<VariableId, StoredValue>, candidateCardId: CardInstanceId?,
   ): EvaluationResult<StoredValue> {
     return when (expression) {
       is ValueExpr.NumberValue -> EvaluationResult.Success(StoredValue.IntegerValue(expression.value))
-
       is ValueExpr.VariableValue -> {
         val stored = variables[expression.variableId] ?: return evalFail(
           "MISSING_VARIABLE", "Variable not found: ${expression.variableId.value}"
@@ -1049,9 +930,7 @@ class RulesEngine(
       }
 
       is ValueExpr.CurrentCardValue -> {
-        if (candidateCardId == null) {
-          return evalFail("NO_CANDIDATE", "CurrentCardValue requires candidateCardId")
-        }
+        if (candidateCardId == null) return evalFail("NO_CANDIDATE", "CurrentCardValue requires candidateCardId")
         val characteristic = readCharacteristic(state, candidateCardId, expression.characteristic)
           ?: return evalFail("MISSING_CHARACTERISTIC", "Characteristic ${expression.characteristic} unavailable")
         EvaluationResult.Success(StoredValue.IntegerValue(characteristic))
@@ -1077,11 +956,8 @@ class RulesEngine(
   }
 
   override fun evaluateCondition(
-    condition: Condition,
-    state: GameState,
-    context: EffectContext,
-    variables: Map<VariableId, StoredValue>,
-    candidateCardId: CardInstanceId?,
+    condition: Condition, state: GameState, context: EffectContext,
+    variables: Map<VariableId, StoredValue>, candidateCardId: CardInstanceId?,
   ): EvaluationResult<Boolean> {
     return when (condition) {
       is Condition.AllConditions -> {
@@ -1169,9 +1045,7 @@ class RulesEngine(
   }
 
   private fun readCharacteristic(
-    state: GameState,
-    cardId: CardInstanceId,
-    characteristic: NumericCharacteristic,
+    state: GameState, cardId: CardInstanceId, characteristic: NumericCharacteristic,
   ): Int? {
     val effective = continuousEffectProcessor.effectiveCharacteristics(state, cardId) ?: return null
     return when (characteristic) {
@@ -1185,9 +1059,7 @@ class RulesEngine(
   }
 
   private fun selectCards(
-    selector: CardSelector,
-    state: GameState,
-    context: EffectContext,
+    selector: CardSelector, state: GameState, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): EvaluationResult<List<CardInstanceId>> {
     val candidates = mutableListOf<CardInstanceId>()
@@ -1195,7 +1067,6 @@ class RulesEngine(
       ZoneType.DECK, ZoneType.DON_DECK, ZoneType.HAND, ZoneType.TRASH, ZoneType.LEADER,
       ZoneType.CHARACTER, ZoneType.STAGE, ZoneType.COST, ZoneType.LIFE, ZoneType.ATTACHED_DON,
     )
-
     for (playerId in state.playerOrder) {
       val player = state.players[playerId] ?: continue
       for (zone in zoneOrder) {
@@ -1216,16 +1087,12 @@ class RulesEngine(
           }.flatMap { it.donCardIds }
         }
         for (cardId in cardIds) {
-          if (matchesSelectorFilters(selector, state, context, cardId, playerId, zone)) {
-            candidates += cardId
-          }
+          if (matchesSelectorFilters(selector, state, context, cardId, playerId, zone)) candidates += cardId
         }
       }
     }
 
-    if (selector.conditions.isEmpty()) {
-      return EvaluationResult.Success(candidates)
-    }
+    if (selector.conditions.isEmpty()) return EvaluationResult.Success(candidates)
 
     val filtered = mutableListOf<CardInstanceId>()
     for (cardId in candidates) {
@@ -1234,8 +1101,7 @@ class RulesEngine(
         when (val result = evaluateCondition(condition, state, context, variables, cardId)) {
           is EvaluationResult.Failed -> return result
           is EvaluationResult.Success -> if (!result.value) {
-            ok = false
-            break
+            ok = false; break
           }
         }
       }
@@ -1245,16 +1111,11 @@ class RulesEngine(
   }
 
   private fun matchesSelectorFilters(
-    selector: CardSelector,
-    state: GameState,
-    context: EffectContext,
-    cardId: CardInstanceId,
-    zoneOwnerId: PlayerId,
-    zone: ZoneType,
+    selector: CardSelector, state: GameState, context: EffectContext,
+    cardId: CardInstanceId, zoneOwnerId: PlayerId, zone: ZoneType,
   ): Boolean {
     val instance = state.cards[cardId] ?: return false
     val definition = cardCatalog.get(instance.definitionId) ?: return false
-
     if (selector.owner != null) {
       val expected = resolvePlayerRelation(selector.owner, state, context) ?: return false
       if (instance.ownerId != expected) return false
@@ -1266,21 +1127,15 @@ class RulesEngine(
     }
     if (selector.categories.isNotEmpty() && definition.category !in selector.categories) return false
     if (selector.name != null && definition.name != selector.name) return false
-
     val effective = continuousEffectProcessor.effectiveCharacteristics(state, cardId) ?: return false
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
-
     return true
   }
 
-  private fun resolvePlayerRelation(
-    relation: PlayerRelation,
-    state: GameState,
-    context: EffectContext,
-  ): PlayerId? {
-    return when (relation) {
+  private fun resolvePlayerRelation(relation: PlayerRelation, state: GameState, context: EffectContext): PlayerId? =
+    when (relation) {
       PlayerRelation.SELF -> context.controllerId
       PlayerRelation.OPPONENT -> state.playerOrder.firstOrNull { it != context.controllerId }
       PlayerRelation.TURN_PLAYER -> state.turn?.playerId
@@ -1289,9 +1144,7 @@ class RulesEngine(
         state.playerOrder.firstOrNull { it != turnPlayer }
       }
     }
-  }
 
-  private fun evalFail(code: String, message: String): EvaluationResult.Failed {
-    return EvaluationResult.Failed(VmError(code, message, 0))
-  }
+  private fun evalFail(code: String, message: String): EvaluationResult.Failed =
+    EvaluationResult.Failed(VmError(code, message, 0))
 }
