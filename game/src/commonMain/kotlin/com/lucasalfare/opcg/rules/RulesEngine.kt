@@ -10,7 +10,8 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val damageProcessor = DamageProcessor(cardCatalog)
   private val costProcessor = CostProcessor()
   private val effectScheduler = EffectScheduler(cardCatalog)
-  private val continuousEffectProcessor = ContinuousEffectProcessor(cardCatalog)
+  private val continuousEffectProcessor =
+    ContinuousEffectProcessor(cardCatalog, this) // escrevi esse this manualmente...
   private val replacementProcessor = ReplacementProcessor()
   private val ruleProcessor = RuleProcessor()
   private val informationManager = InformationManager()
