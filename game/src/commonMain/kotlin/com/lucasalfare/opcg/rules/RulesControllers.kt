@@ -353,22 +353,35 @@ internal class TurnController {
 
 internal class MainPhaseController {
 
+  private companion object {
+    const val MAX_CHARACTERS = 5
+  }
+
   fun validatePlayCard(
     state: GameState,
     command: PlayCardCommand,
     catalog: CardCatalog,
     continuous: ContinuousEffectProcessor,
+    costProcessor: CostProcessor,
   ): ValidationResult {
     val violations = mutableListOf<RuleViolation>()
     val turn = state.turn
     if (turn == null || turn.phase != GamePhase.MAIN || turn.playerId != command.playerId) {
       violations += RuleViolation("NOT_MAIN_PHASE", "Play card only during your Main Phase")
     }
-    val card = state.cards[command.cardId]
-    if (card == null) {
-      violations += RuleViolation("UNKNOWN_CARD", "Card not found")
-      return ValidationResult(false, violations)
-    }
+    violations += playViolations(state, command, catalog, continuous, costProcessor)
+    return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  private fun playViolations(
+    state: GameState,
+    command: PlayCardCommand,
+    catalog: CardCatalog,
+    continuous: ContinuousEffectProcessor,
+    costProcessor: CostProcessor,
+  ): List<RuleViolation> {
+    val card = state.cards[command.cardId] ?: return listOf(RuleViolation("UNKNOWN_CARD", "Card not found"))
+    val violations = mutableListOf<RuleViolation>()
     if (card.ownerId != command.playerId) {
       violations += RuleViolation("NOT_OWNER", "Player does not own the card")
     }
@@ -379,12 +392,47 @@ internal class MainPhaseController {
     val def = catalog.get(card.definitionId)
     if (def == null) {
       violations += RuleViolation("UNKNOWN_DEFINITION", "Card definition missing")
-    } else if (def.category == CardCategory.LEADER) {
-      violations += RuleViolation("CANNOT_PLAY_LEADER", "Leader cannot be played during the game")
-    } else if (def.category !in setOf(CardCategory.CHARACTER, CardCategory.EVENT, CardCategory.STAGE)) {
-      violations += RuleViolation("INVALID_CATEGORY", "Card category cannot be played")
+      return violations
     }
-    return ValidationResult(violations.isEmpty(), violations)
+    when (def.category) {
+      CardCategory.LEADER -> violations += RuleViolation(
+        "CANNOT_PLAY_LEADER",
+        "Leader cannot be played during the game"
+      )
+
+      CardCategory.CHARACTER -> if (player != null && player.characters.cards.size >= MAX_CHARACTERS) {
+        violations += RuleViolation("CHARACTER_LIMIT", "Character area already has $MAX_CHARACTERS characters")
+      }
+
+      CardCategory.EVENT -> if (isCounterOnlyEvent(def)) {
+        violations += RuleViolation("COUNTER_EVENT_NOT_PLAYABLE", "Counter event cannot be played in Main Phase")
+      }
+
+      CardCategory.STAGE -> Unit
+
+      CardCategory.DON -> violations += RuleViolation("INVALID_CATEGORY", "Card category cannot be played")
+    }
+    if (donPaymentFor(state, command, catalog, continuous, costProcessor) == null) {
+      violations += RuleViolation("INSUFFICIENT_DON", "Not enough active DON!! to pay the play cost")
+    }
+    return violations
+  }
+
+  private fun donPaymentFor(
+    state: GameState,
+    command: PlayCardCommand,
+    catalog: CardCatalog,
+    continuous: ContinuousEffectProcessor,
+    costProcessor: CostProcessor,
+  ): List<CardInstanceId>? {
+    val effectiveCost = costProcessor.effectiveCost(state, command.cardId, continuous, catalog)
+    val payment = costProcessor.selectActiveDon(state, command.playerId, effectiveCost)
+    return payment.takeIf { payment.size >= effectiveCost }
+  }
+
+  private fun isCounterOnlyEvent(def: CardDefinition): Boolean {
+    val timings = def.abilities.filterIsInstance<ActivatedAbilityDefinition>().map { it.timing }
+    return ActivationTiming.COUNTER_STEP in timings && ActivationTiming.ACTIVATE_MAIN !in timings
   }
 
   fun processPlayCard(
@@ -395,13 +443,12 @@ internal class MainPhaseController {
     costProcessor: CostProcessor,
     evaluator: RulesEngine,
   ): GameTransition {
-    val card = state.cards[command.cardId] ?: return GameTransition(emptyList(), emptyList())
-    val def = catalog.get(card.definitionId) ?: return GameTransition(emptyList(), emptyList())
-    val effectiveCost = costProcessor.effectiveCost(state, command.cardId, continuous, catalog)
-    val payment = costProcessor.selectActiveDon(state, command.playerId, effectiveCost)
-    if (payment.size < effectiveCost) {
-      return GameTransition(emptyList(), emptyList())
+    if (playViolations(state, command, catalog, continuous, costProcessor).isNotEmpty()) {
+      return emptyTransition()
     }
+    val card = state.cards[command.cardId] ?: return emptyTransition()
+    val def = catalog.get(card.definitionId) ?: return emptyTransition()
+    val payment = donPaymentFor(state, command, catalog, continuous, costProcessor) ?: return emptyTransition()
 
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
@@ -454,10 +501,34 @@ internal class MainPhaseController {
           ),
           visibility = EventVisibility.PUBLIC,
         )
-        return GameTransition(events, emptyList())
+        val programs = abilityPrograms(state, command, def, setOf(ActivationTiming.ON_PLAY), events.last())
+        return GameTransition(events, programs)
       }
 
       CardCategory.STAGE -> {
+        val previousStage = state.players.getValue(command.playerId).stage.cards.firstOrNull()
+        if (previousStage != null) {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.CARD_MOVED,
+            sourceCardId = previousStage,
+            payload = GameEventPayload.CardMovedPayload(
+              cardId = previousStage,
+              fromPlayerId = command.playerId,
+              fromZone = ZoneType.STAGE,
+              toPlayerId = state.cards[previousStage]?.ownerId ?: command.playerId,
+              toZone = ZoneType.TRASH,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_UP,
+              visibility = CardVisibility.PUBLIC,
+            ),
+            visibility = EventVisibility.PUBLIC,
+          )
+        }
         seq += 1
         events += GameEvent(
           id = EventId("${state.id.value}:$seq"),
@@ -492,7 +563,8 @@ internal class MainPhaseController {
           ),
           visibility = EventVisibility.PUBLIC,
         )
-        return GameTransition(events, emptyList())
+        val programs = abilityPrograms(state, command, def, setOf(ActivationTiming.ON_PLAY), events.last())
+        return GameTransition(events, programs)
       }
 
       CardCategory.EVENT -> {
@@ -537,26 +609,39 @@ internal class MainPhaseController {
           payload = GameEventPayload.CardActivatedPayload(command.cardId, command.playerId),
           visibility = EventVisibility.PUBLIC,
         )
-        val programs = def.abilities.filterIsInstance<ActivatedAbilityDefinition>().map { ability ->
-          val activationSeq = seq
-          ProgramRequest(
-            executionId = ExecutionId("${state.id.value}:event:$activationSeq:${ability.id.value}"),
-            program = ability.program,
-            context = EffectContext(
-              gameId = state.id,
-              controllerId = command.playerId,
-              sourceCardId = command.cardId,
-              abilityId = ability.id,
-              triggeringEvent = events.last(),
-            ),
-          )
-        }
+        val programs = abilityPrograms(state, command, def, setOf(ActivationTiming.ACTIVATE_MAIN), events.last())
         return GameTransition(events, programs)
       }
 
-      else -> return GameTransition(emptyList(), emptyList())
+      else -> error("Category ${def.category} cannot be played")
     }
   }
+
+  private fun abilityPrograms(
+    state: GameState,
+    command: PlayCardCommand,
+    def: CardDefinition,
+    timings: Set<ActivationTiming>,
+    triggeringEvent: GameEvent,
+  ): List<ProgramRequest> {
+    return def.abilities.filterIsInstance<ActivatedAbilityDefinition>().filter { it.timing in timings }.map { ability ->
+        ProgramRequest(
+          executionId = ExecutionId(
+            "${state.id.value}:play:${command.cardId.value}:${ability.id.value}:${triggeringEvent.sequence}"
+          ),
+          program = ability.program,
+          context = EffectContext(
+            gameId = state.id,
+            controllerId = command.playerId,
+            sourceCardId = command.cardId,
+            abilityId = ability.id,
+            triggeringEvent = triggeringEvent,
+          ),
+        )
+      }
+  }
+
+  private fun emptyTransition(): GameTransition = GameTransition(emptyList(), emptyList())
 
   fun validateGiveDon(
     state: GameState,

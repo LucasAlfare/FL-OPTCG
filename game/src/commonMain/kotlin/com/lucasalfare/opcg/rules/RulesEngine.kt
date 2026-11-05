@@ -31,7 +31,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       )
     }
     return when (command) {
-      is PlayCardCommand -> mainPhaseController.validatePlayCard(state, command, cardCatalog, continuousEffectProcessor)
+      is PlayCardCommand -> mainPhaseController.validatePlayCard(
+        state, command, cardCatalog, continuousEffectProcessor, costProcessor
+      )
+
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
       is EndMainPhaseCommand -> mainPhaseController.validateEndMain(state, command)
       is ActivateAbilityCommand -> effectScheduler.validateActivate(state, command, this)
