@@ -32,11 +32,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     }
     return when (command) {
       is PlayCardCommand -> mainPhaseController.validatePlayCard(
-        state,
-        command,
-        cardCatalog,
-        continuousEffectProcessor,
-        costProcessor
+        state, command, cardCatalog, continuousEffectProcessor, costProcessor
       )
 
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
@@ -116,6 +112,13 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
 
   fun selectCardIds(selector: CardSelector, state: GameState, context: EffectContext): List<CardInstanceId>? =
     (selectCards(selector, state, context, emptyMap()) as? EvaluationResult.Success)?.value
+
+  fun stateSignature(state: GameState): String = loopProcessor.signatureOf(state)
+
+  fun resolveRepeatedState(state: GameState, seenSignatures: Collection<String>): GameTransition? {
+    if (!loopProcessor.isRepeated(state, seenSignatures)) return null
+    return GameTransition(loopProcessor.resolve(state, emptySet(), emptyMap()).events, emptyList())
+  }
 
   override fun execute(
     instruction: Instruction, state: GameState, context: EffectContext,

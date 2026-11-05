@@ -208,7 +208,8 @@ internal class ZoneInstructionExecutor {
     val transition = MainPhaseController().processPlayCard(
       state, command, catalog, continuous, costProcessor, engine,
     )
-    return InstructionExecutionResult.Completed(null, transition.events)
+    if (transition.events.isEmpty()) return fail("PLAY_REJECTED", "Card cannot be played")
+    return InstructionExecutionResult.Completed(null, transition.events, transition.programsToRun)
   }
 
   fun shuffleZone(state: GameState, instruction: ShuffleZone): InstructionExecutionResult {

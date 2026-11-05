@@ -2,6 +2,7 @@
 
 package com.lucasalfare.opcg
 
+import com.lucasalfare.opcg.rules.ProgramRequest
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -47,6 +48,9 @@ data class ProgramFrame(
   val callStack: List<ProgramCounter>,
   val status: ProgramStatus,
   val pendingChoiceId: ChoiceId?,
+  val pendingPrograms: List<ProgramRequest> = emptyList(),
+  val followUps: List<ProgramRequest> = emptyList(),
+  val stepCount: Int = 0,
 )
 
 @Serializable
@@ -98,6 +102,7 @@ sealed class InstructionExecutionResult {
   data class Completed(
     val value: StoredValue?,
     val events: List<GameEvent>,
+    val programs: List<ProgramRequest> = emptyList(),
   ) : InstructionExecutionResult()
 
   @Serializable
@@ -172,6 +177,7 @@ sealed class VmTransition {
   data class VmCompleted(
     val state: GameState,
     val events: List<GameEvent>,
+    val programs: List<ProgramRequest> = emptyList(),
   ) : VmTransition()
 
   @Serializable
@@ -193,6 +199,7 @@ class VirtualMachine(
     context: EffectContext,
     state: GameState,
     executionId: ExecutionId,
+    followUps: List<ProgramRequest> = emptyList(),
   ): VmTransition {
     val frame = ProgramFrame(
       id = executionId,
@@ -203,6 +210,7 @@ class VirtualMachine(
       callStack = emptyList(),
       status = ProgramStatus.RUNNING,
       pendingChoiceId = null,
+      followUps = followUps,
     )
     val (stateWithFrame, frameEvents) = emitFrameChanged(state, executionId, frame)
     return run(frame, stateWithFrame, frameEvents)
@@ -220,8 +228,9 @@ class VirtualMachine(
       return fail(frame, state, emptyList(), "CHOICE_MISMATCH", "Choice id does not match pending choice")
     }
 
-    val pending = state.pendingChoices.firstOrNull { it.id == frame.pendingChoiceId }
-      ?: return fail(frame, state, emptyList(), "MISSING_CHOICE", "Pending choice not found in state")
+    val pending = state.pendingChoices.firstOrNull { it.id == frame.pendingChoiceId } ?: return fail(
+      frame, state, emptyList(), "MISSING_CHOICE", "Pending choice not found in state"
+    )
 
     if (choice.playerId != pending.playerId) {
       return fail(frame, state, emptyList(), "PLAYER_MISMATCH", "Player id does not match pending choice")
@@ -399,8 +408,18 @@ class VirtualMachine(
     var frame = initialFrame
     var state = initialState
     val accumulated = initialEvents.toMutableList()
+    val derived = initialFrame.pendingPrograms.toMutableList()
 
     while (true) {
+      if (frame.stepCount >= MAX_INSTRUCTION_STEPS) {
+        return failAndEmit(
+          frame,
+          state,
+          accumulated,
+          VmError("STEP_LIMIT_EXCEEDED", "Program exceeded $MAX_INSTRUCTION_STEPS steps", frame.instructionPointer),
+        )
+      }
+      frame = frame.copy(stepCount = frame.stepCount + 1)
       val block = currentBlock(frame)
 
       if (frame.instructionPointer >= block.size) {
@@ -408,7 +427,11 @@ class VirtualMachine(
           frame.copy(status = ProgramStatus.COMPLETED, pendingChoiceId = null)
           val (finalState, frameEvents) = emitFrameChanged(state, frame.id, null)
           accumulated += frameEvents
-          return VmTransition.VmCompleted(state = finalState, events = accumulated)
+          return VmTransition.VmCompleted(
+            state = finalState,
+            events = accumulated,
+            programs = frame.followUps + derived,
+          )
         }
         frame = exitBlock(frame)
         continue
@@ -457,7 +480,11 @@ class VirtualMachine(
             candidates = emptyList(),
             visibility = EventVisibility.PRIVATE_TO_PLAYER(frame.context.controllerId),
           )
-          val suspended = frame.copy(status = ProgramStatus.SUSPENDED, pendingChoiceId = choiceId)
+          val suspended = frame.copy(
+            status = ProgramStatus.SUSPENDED,
+            pendingChoiceId = choiceId,
+            pendingPrograms = derived.toList(),
+          )
           var nextState = state
           val extra = mutableListOf<GameEvent>()
           emitFrameChanged(nextState, frame.id, suspended).let { (s, e) ->
@@ -529,6 +556,7 @@ class VirtualMachine(
               val suspended = frame.copy(
                 status = ProgramStatus.SUSPENDED,
                 pendingChoiceId = choice.id,
+                pendingPrograms = derived.toList(),
               )
               var nextState = state
               val extra = mutableListOf<GameEvent>()
@@ -549,6 +577,7 @@ class VirtualMachine(
                 state = eventApplier.apply(state, result.events)
                 accumulated += result.events
               }
+              derived += result.programs
               val destination = destinationOf(instruction)
               val variables = when {
                 destination != null && result.value != null -> frame.variables + (destination to result.value)
@@ -762,5 +791,6 @@ class VirtualMachine(
   companion object {
     private const val BRANCH_TRUE = 0
     private const val BRANCH_FALSE = 1
+    private const val MAX_INSTRUCTION_STEPS = 10_000
   }
 }

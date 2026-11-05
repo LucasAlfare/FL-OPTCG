@@ -537,14 +537,10 @@ internal class LoopProcessor {
     val draw: Boolean,
   )
 
-  fun detectRepeatedState(
-    current: GameState,
-    history: List<GameState>,
-    window: Int = 3,
-  ): Boolean {
-    if (history.size < window) return false
-    val signature = stateSignature(current)
-    return history.takeLast(window).all { stateSignature(it) == signature }
+  fun signatureOf(state: GameState): String = GameSerialization.encodeState(state.copy(lastEventSequence = 0))
+
+  fun isRepeated(state: GameState, seenSignatures: Collection<String>): Boolean {
+    return signatureOf(state) in seenSignatures
   }
 
   fun resolve(
@@ -576,19 +572,6 @@ internal class LoopProcessor {
       repetitions = minOf(turnReps, nonTurnReps),
       draw = false,
     )
-  }
-
-  private fun stateSignature(state: GameState): String = buildString {
-    append(state.turn?.number ?: 0).append('|')
-    append(state.turn?.phase?.name ?: "").append('|')
-    for (playerId in state.playerOrder) {
-      val player = state.players[playerId] ?: continue
-      append(player.deck.cards.size).append(',')
-      append(player.hand.cards.size).append(',')
-      append(player.life.cards.size).append(',')
-      append(player.cost.cards.size).append(',')
-      append(player.characters.cards.size).append(',')
-    }
   }
 
   private fun drawEvent(state: GameState): GameEvent {

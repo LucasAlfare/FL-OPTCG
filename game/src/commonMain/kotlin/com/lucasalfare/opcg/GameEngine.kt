@@ -591,12 +591,10 @@ class GameEngine private constructor(
       }
     }
 
-    for (request in transition.programsToRun) {
-      val vmResult = runVmStart(request, transactionEvents)
-      if (vmResult != null) {
-        appendTransaction(command, transactionEvents)
-        return vmResult
-      }
+    val programResult = runDerived(transition.programsToRun, transactionEvents)
+    if (programResult != null) {
+      appendTransaction(command, transactionEvents)
+      return programResult
     }
 
     val autoResult = drainAutomaticWork(transactionEvents)
@@ -703,10 +701,7 @@ class GameEngine private constructor(
         accumulated += transition.events
       }
 
-      for (request in transition.programsToRun) {
-        val vmResult = runVmStart(request, accumulated)
-        if (vmResult != null) return false
-      }
+      if (runDerived(transition.programsToRun, accumulated) != null) return false
 
       val autoResult = drainAutomaticWork(accumulated)
       if (autoResult != null) return false
@@ -857,9 +852,20 @@ class GameEngine private constructor(
     }
   }
 
-  private fun runVmStart(request: ProgramRequest, accumulated: MutableList<GameEvent>): CommandResult? {
-    val vmTransition = virtualMachine.start(request.program, request.context, state, request.executionId)
+  private fun runVmStart(
+    request: ProgramRequest,
+    accumulated: MutableList<GameEvent>,
+    followUps: List<ProgramRequest> = emptyList(),
+  ): CommandResult? {
+    val vmTransition = virtualMachine.start(
+      request.program, request.context, state, request.executionId, followUps,
+    )
     return applyVmTransition(vmTransition, accumulated)
+  }
+
+  private fun runDerived(programs: List<ProgramRequest>, accumulated: MutableList<GameEvent>): CommandResult? {
+    if (programs.isEmpty()) return null
+    return runVmStart(programs.first(), accumulated, programs.drop(1))
   }
 
   private fun runVmResume(
@@ -884,7 +890,7 @@ class GameEngine private constructor(
           state = reducer.apply(state, vmTransition.events)
           accumulated += vmTransition.events
         }
-        null
+        runDerived(vmTransition.programs, accumulated)
       }
 
       is VmTransition.VmSuspended -> {
@@ -944,12 +950,8 @@ class GameEngine private constructor(
           state = reducer.apply(state, transition.events)
           accumulated += transition.events
         }
-        for (request in transition.programsToRun) {
-          if (state.pendingChoices.isNotEmpty()) break
-          val vmResult = runVmStart(request, accumulated)
-          if (vmResult is CommandResult.Failed) return vmResult
-          if (state.pendingChoices.isNotEmpty()) break
-        }
+        val vmResult = runDerived(transition.programsToRun, accumulated)
+        if (vmResult is CommandResult.Failed) return vmResult
         if (transition.choiceToResume != null && state.pendingChoices.isEmpty()) {
           val choice = transition.choiceToResume
           val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }
