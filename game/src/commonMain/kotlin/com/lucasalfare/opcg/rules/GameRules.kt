@@ -1077,8 +1077,9 @@ internal class EffectScheduler(
     command: ActivateAbilityCommand,
     evaluator: RulesEngine,
   ): ValidationResult {
-    val result =
-      resolveActivatedAbility(state, command.playerId, command.sourceCardId, command.abilityId, null, evaluator)
+    val result = resolveActivatedAbility(
+      state, command.playerId, command.sourceCardId, command.abilityId, null, evaluator, forManual = true,
+    )
     return when (result) {
       is AbilityResolveResult.Ok -> ValidationResult(true, emptyList())
       is AbilityResolveResult.Invalid -> ValidationResult(false, result.violations)
@@ -1090,8 +1091,9 @@ internal class EffectScheduler(
     command: ActivateAbilityCommand,
     evaluator: RulesEngine,
   ): GameTransition {
-    val resolved =
-      resolveActivatedAbility(state, command.playerId, command.sourceCardId, command.abilityId, null, evaluator)
+    val resolved = resolveActivatedAbility(
+      state, command.playerId, command.sourceCardId, command.abilityId, null, evaluator, forManual = true,
+    )
     if (resolved is AbilityResolveResult.Invalid) {
       return GameTransition(emptyList(), emptyList())
     }
@@ -1106,7 +1108,9 @@ internal class EffectScheduler(
     variables: Map<VariableId, StoredValue>,
     evaluator: RulesEngine,
   ): InstructionExecutionResult {
-    val matches = findActivatedAbilities(state, instruction.selector, instruction.timing)
+    val matches = findActivatedAbilities(
+      state, instruction.selector, instruction.timing, context.controllerId, evaluator,
+    )
     if (matches.isEmpty()) {
       return InstructionExecutionResult.Completed(null, emptyList())
     }
@@ -1116,7 +1120,7 @@ internal class EffectScheduler(
       val card = state.cards[cardId] ?: continue
       val controller = evaluator.effectiveController(state, cardId) ?: card.controllerId
       val resolved = resolveActivatedAbility(
-        state, controller, cardId, ability.id, instruction.timing, evaluator,
+        state, controller, cardId, ability.id, instruction.timing, evaluator, forManual = false,
       )
       if (resolved is AbilityResolveResult.Invalid) continue
       resolved as AbilityResolveResult.Ok
@@ -1206,6 +1210,7 @@ internal class EffectScheduler(
     for (cardId in state.cards.keys.sortedBy { it.value }) {
       val instance = state.cards[cardId] ?: continue
       val definition = cardCatalog.get(instance.definitionId) ?: continue
+      if (!isInEligibleAutoZone(state, cardId, definition, event)) continue
       val controller = evaluator.effectiveController(state, cardId) ?: instance.controllerId
       val abilities =
         definition.abilities.filterIsInstance<AutoAbilityDefinition>() + grantedAutoAbilities(state, cardId)
@@ -1242,6 +1247,59 @@ internal class EffectScheduler(
     return results
   }
 
+  private fun isInEligibleAutoZone(
+    state: GameState,
+    cardId: CardInstanceId,
+    definition: CardDefinition,
+    event: GameEvent,
+  ): Boolean {
+    if (event.sourceCardId == cardId) return true
+    val zone = zoneOf(state, cardId) ?: return false
+    return when (definition.category) {
+      CardCategory.LEADER -> zone == ZoneType.LEADER
+      CardCategory.CHARACTER -> zone == ZoneType.CHARACTER
+      CardCategory.STAGE -> zone == ZoneType.STAGE
+      CardCategory.EVENT -> false
+      CardCategory.DON -> false
+    }
+  }
+
+  private fun isZoneLegalForActivatedAbility(
+    state: GameState,
+    cardId: CardInstanceId,
+    ability: ActivatedAbilityDefinition,
+  ): Boolean {
+    val instance = state.cards[cardId] ?: return false
+    val definition = cardCatalog.get(instance.definitionId) ?: return false
+    val zone = zoneOf(state, cardId) ?: return false
+    return when (definition.category) {
+      CardCategory.LEADER -> zone == ZoneType.LEADER
+      CardCategory.CHARACTER -> zone == ZoneType.CHARACTER
+      CardCategory.STAGE -> zone == ZoneType.STAGE
+      CardCategory.EVENT -> when (ability.timing) {
+        ActivationTiming.ON_TRIGGER -> zone == ZoneType.LIFE || zone == ZoneType.HAND || zone == ZoneType.TRASH
+        else -> zone == ZoneType.HAND
+      }
+      CardCategory.DON -> false
+    }
+  }
+
+  private fun zoneOf(state: GameState, cardId: CardInstanceId): ZoneType? {
+    for (player in state.players.values) {
+      if (cardId in player.leader.cards) return ZoneType.LEADER
+      if (cardId in player.characters.cards) return ZoneType.CHARACTER
+      if (cardId in player.stage.cards) return ZoneType.STAGE
+      if (cardId in player.hand.cards) return ZoneType.HAND
+      if (cardId in player.deck.cards) return ZoneType.DECK
+      if (cardId in player.trash.cards) return ZoneType.TRASH
+      if (cardId in player.cost.cards) return ZoneType.COST
+      if (cardId in player.life.cards) return ZoneType.LIFE
+      if (cardId in player.donDeck.cards) return ZoneType.DON_DECK
+    }
+    if (state.donAttachments.any { cardId in it.donCardIds }) return ZoneType.ATTACHED_DON
+    return null
+  }
+
   private fun grantedAutoAbilities(state: GameState, cardId: CardInstanceId): List<AutoAbilityDefinition> {
     return state.activeEffects.mapNotNull { effect ->
       if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
@@ -1270,7 +1328,7 @@ internal class EffectScheduler(
 
     if (pattern.source != null) {
       val sourceId = event.sourceCardId ?: return false
-      if (!cardMatchesSelector(pattern.source, state, sourceId, controllerId, evaluator, event)) return false
+      if (!cardMatchesSelector(pattern.source, state, sourceId, controllerId, evaluator, event, sourceCardId)) return false
     }
 
     if (pattern.target != null) {
@@ -1278,7 +1336,7 @@ internal class EffectScheduler(
       if (targetIds.isEmpty()) return false
       if (targetIds.none {
           cardMatchesSelector(
-            pattern.target, state, it, controllerId, evaluator, event
+            pattern.target, state, it, controllerId, evaluator, event, sourceCardId
           )
         }) return false
     }
@@ -1290,7 +1348,7 @@ internal class EffectScheduler(
     }
 
     if (pattern.targetPlayer != null) {
-      val targetPlayer = extractTargetPlayer(event) ?: return false
+      val targetPlayer = extractTargetPlayer(event, state, evaluator) ?: return false
       val expected = resolveRelation(pattern.targetPlayer, state, controllerId) ?: return false
       if (targetPlayer != expected) return false
     }
@@ -1304,12 +1362,18 @@ internal class EffectScheduler(
     cardId: CardInstanceId,
     controllerId: PlayerId,
     evaluator: RulesEngine,
-    event: GameEvent,
+    event: GameEvent?,
+    abilitySourceCardId: CardInstanceId?,
   ): Boolean {
     val instance = state.cards[cardId] ?: return false
     val definition = cardCatalog.get(instance.definitionId) ?: return false
+
+    if (selector.zones.isNotEmpty()) {
+      val zone = zoneOf(state, cardId) ?: return false
+      if (zone !in selector.zones) return false
+    }
+
     if (selector.categories.isNotEmpty() && definition.category !in selector.categories) return false
-    if (selector.name != null && definition.name != selector.name) return false
     if (selector.owner != null) {
       val expected = resolveRelation(selector.owner, state, controllerId) ?: return false
       if (instance.ownerId != expected) return false
@@ -1319,12 +1383,28 @@ internal class EffectScheduler(
       val effective = evaluator.effectiveController(state, cardId) ?: instance.controllerId
       if (effective != expected) return false
     }
-    val effective = evaluator.effectiveCharacteristics(state, cardId)
-    if (effective != null) {
-      if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
-      if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
-      if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
+    val effective = evaluator.effectiveCharacteristics(state, cardId) ?: return false
+    if (selector.name != null && effective.name != selector.name) return false
+    if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
+    if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
+    if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
+
+    if (selector.conditions.isNotEmpty()) {
+      val ctx = EffectContext(
+        gameId = state.id,
+        controllerId = controllerId,
+        sourceCardId = abilitySourceCardId ?: event?.sourceCardId,
+        abilityId = null,
+        triggeringEvent = event,
+      )
+      for (condition in selector.conditions) {
+        when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap(), cardId)) {
+          is EvaluationResult.Failed -> return false
+          is EvaluationResult.Success -> if (!result.value) return false
+        }
+      }
     }
+
     return true
   }
 
@@ -1333,8 +1413,14 @@ internal class EffectScheduler(
     is GameEventPayload.CardPlayedPayload -> listOf(p.cardId)
     is GameEventPayload.CardKnockedOutPayload -> listOf(p.cardId)
     is GameEventPayload.CardActivatedPayload -> listOf(p.cardId)
-    is GameEventPayload.AttackDeclaredPayload -> listOf(p.attackerId)
-    is GameEventPayload.BlockActivatedPayload -> listOf(p.blockerId)
+    is GameEventPayload.AttackDeclaredPayload -> when (val t = p.target) {
+      is BattleTarget.CardTarget -> listOf(t.cardInstanceId)
+      is BattleTarget.PlayerTarget -> emptyList()
+    }
+    is GameEventPayload.BlockActivatedPayload -> when (val t = p.previousTarget) {
+      is BattleTarget.CardTarget -> listOf(t.cardInstanceId)
+      is BattleTarget.PlayerTarget -> emptyList()
+    }
     is GameEventPayload.DonAttachedPayload -> listOf(p.hostCardId)
     is GameEventPayload.CardsDrawnPayload -> p.cardIds
     else -> event.sourceCardId?.let { listOf(it) } ?: emptyList()
@@ -1354,16 +1440,28 @@ internal class EffectScheduler(
     else -> null
   }
 
-  private fun extractTargetPlayer(event: GameEvent): PlayerId? = when (val p = event.payload) {
+  private fun extractTargetPlayer(
+    event: GameEvent,
+    state: GameState,
+    evaluator: RulesEngine,
+  ): PlayerId? = when (val p = event.payload) {
     is GameEventPayload.DamageProcessedPayload -> p.playerId
     is GameEventPayload.LifeChangedPayload -> p.playerId
     is GameEventPayload.CardKnockedOutPayload -> p.ownerId
-    is GameEventPayload.AttackDeclaredPayload -> when (val t = p.target) {
-      is BattleTarget.PlayerTarget -> t.playerId
-      is BattleTarget.CardTarget -> null
-    }
-
+    is GameEventPayload.AttackDeclaredPayload -> resolveTargetPlayer(p.target, state, evaluator)
+    is GameEventPayload.BlockActivatedPayload -> resolveTargetPlayer(p.previousTarget, state, evaluator)
     else -> null
+  }
+
+  private fun resolveTargetPlayer(
+    target: BattleTarget,
+    state: GameState,
+    evaluator: RulesEngine,
+  ): PlayerId? = when (target) {
+    is BattleTarget.PlayerTarget -> target.playerId
+    is BattleTarget.CardTarget -> state.cards[target.cardInstanceId]?.let { card ->
+      evaluator.effectiveController(state, target.cardInstanceId) ?: card.controllerId
+    }
   }
 
   private fun resolveRelation(relation: PlayerRelation, state: GameState, self: PlayerId): PlayerId? {
@@ -1394,6 +1492,7 @@ internal class EffectScheduler(
     abilityId: AbilityId,
     requiredTiming: ActivationTiming?,
     evaluator: RulesEngine,
+    forManual: Boolean,
   ): AbilityResolveResult {
     val violations = mutableListOf<RuleViolation>()
     val card = state.cards[sourceCardId]
@@ -1417,8 +1516,11 @@ internal class EffectScheduler(
     if (requiredTiming != null && ability.timing != requiredTiming) {
       violations += RuleViolation("TIMING_MISMATCH", "Ability timing does not match")
     }
-    if (!isTimingLegal(state, ability.timing, playerId)) {
+    if (!isTimingLegal(state, ability.timing, playerId, forManual)) {
       violations += RuleViolation("ILLEGAL_TIMING", "Ability cannot be activated in the current window")
+    }
+    if (!isZoneLegalForActivatedAbility(state, sourceCardId, ability)) {
+      violations += RuleViolation("ILLEGAL_ZONE", "Card is not in a zone where its ability can be activated")
     }
     if (ability.condition != null) {
       val ctx = EffectContext(
@@ -1460,30 +1562,39 @@ internal class EffectScheduler(
     state: GameState,
     selector: AbilitySelector,
     timing: ActivationTiming?,
+    contextControllerId: PlayerId,
+    evaluator: RulesEngine,
   ): List<Pair<CardInstanceId, ActivatedAbilityDefinition>> {
     val results = mutableListOf<Pair<CardInstanceId, ActivatedAbilityDefinition>>()
     for ((cardId, instance) in state.cards) {
+      val definition = cardCatalog.get(instance.definitionId) ?: continue
       if (selector.cardSelector != null) {
-        val def = cardCatalog.get(instance.definitionId) ?: continue
-        val sel = selector.cardSelector
-        if (sel.categories.isNotEmpty() && def.category !in sel.categories) continue
-        if (sel.name != null && def.name != sel.name) continue
+        if (!cardMatchesSelector(
+            selector.cardSelector, state, cardId, contextControllerId, evaluator, event = null,
+            abilitySourceCardId = null,
+          )
+        ) continue
       }
-      val def = cardCatalog.get(instance.definitionId) ?: continue
       val abilities =
-        (def.abilities + grantedActivatedAbilities(state, cardId)).filterIsInstance<ActivatedAbilityDefinition>()
+        (definition.abilities + grantedActivatedAbilities(state, cardId)).filterIsInstance<ActivatedAbilityDefinition>()
       for (ability in abilities) {
         if (selector.abilityId != null && ability.id != selector.abilityId) continue
         if (selector.abilityType != null && selector.abilityType != AbilityType.ACTIVATED) continue
         if (timing != null && ability.timing != timing) continue
         if (selector.timing != null && ability.timing != selector.timing) continue
+        if (!isZoneLegalForActivatedAbility(state, cardId, ability)) continue
         results += cardId to ability
       }
     }
     return results.sortedBy { it.first.value + it.second.id.value }
   }
 
-  private fun isTimingLegal(state: GameState, timing: ActivationTiming, playerId: PlayerId): Boolean {
+  private fun isTimingLegal(
+    state: GameState,
+    timing: ActivationTiming,
+    playerId: PlayerId,
+    forManual: Boolean,
+  ): Boolean {
     val turn = state.turn
     return when (timing) {
       ActivationTiming.ACTIVATE_MAIN -> turn != null && turn.phase == GamePhase.MAIN && turn.playerId == playerId
@@ -1494,7 +1605,11 @@ internal class EffectScheduler(
       ActivationTiming.AT_TURN_START -> turn != null
       ActivationTiming.END_OF_YOUR_TURN -> turn != null && turn.phase == GamePhase.END && turn.playerId == playerId
       ActivationTiming.END_OF_OPPONENT_TURN -> turn != null && turn.phase == GamePhase.END && turn.playerId != playerId
-      ActivationTiming.ON_PLAY, ActivationTiming.ON_KO, ActivationTiming.ON_OPPONENT_ATTACK, ActivationTiming.ON_TRIGGER, ActivationTiming.AT_GAME_START -> true
+      ActivationTiming.AT_GAME_START -> state.setup?.step == GameSetupStep.INITIAL_EFFECTS
+      ActivationTiming.ON_PLAY,
+      ActivationTiming.ON_KO,
+      ActivationTiming.ON_OPPONENT_ATTACK,
+      ActivationTiming.ON_TRIGGER -> !forManual
     }
   }
 

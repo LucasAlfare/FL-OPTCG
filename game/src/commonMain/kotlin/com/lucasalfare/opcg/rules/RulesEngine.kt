@@ -1143,8 +1143,8 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       if (controller != expected) return false
     }
     if (selector.categories.isNotEmpty() && definition.category !in selector.categories) return false
-    if (selector.name != null && definition.name != selector.name) return false
     val effective = continuousEffectProcessor.effectiveCharacteristics(state, cardId) ?: return false
+    if (selector.name != null && effective.name != selector.name) return false
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
