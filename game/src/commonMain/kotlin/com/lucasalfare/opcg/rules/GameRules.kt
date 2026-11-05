@@ -544,6 +544,47 @@ internal class BattleResolver(
     return ValidationResult(violations.isEmpty(), violations)
   }
 
+  fun validatePassBattleStep(
+    state: GameState,
+    command: PassBattleStepCommand,
+    continuous: ContinuousEffectProcessor,
+  ): ValidationResult {
+    val battle = state.battle
+      ?: return ValidationResult(false, listOf(RuleViolation("NO_BATTLE", "No battle in progress")))
+    val expected = expectedBattleActor(state, battle, continuous)
+    if (expected != null && command.playerId != expected) {
+      return ValidationResult(
+        false,
+        listOf(RuleViolation("WRONG_ACTOR", "Player cannot pass in this battle window")),
+      )
+    }
+    return ValidationResult(true, emptyList())
+  }
+
+  private fun expectedBattleActor(
+    state: GameState,
+    battle: BattleState,
+    continuous: ContinuousEffectProcessor,
+  ): PlayerId? {
+    val attacker = state.cards[battle.attackerId]?.let { card ->
+      continuous.effectiveController(state, battle.attackerId) ?: card.controllerId
+    }
+    val defender = when (val target = battle.currentTarget) {
+      is BattleTarget.CardTarget -> state.cards[target.cardInstanceId]?.let { card ->
+        continuous.effectiveController(state, target.cardInstanceId) ?: card.controllerId
+      }
+
+      is BattleTarget.PlayerTarget -> target.playerId
+    }
+    return when (battle.step) {
+      BattleStep.ATTACK -> attacker
+      BattleStep.BLOCK -> defender
+      BattleStep.COUNTER -> defender
+      BattleStep.DAMAGE -> attacker
+      BattleStep.END -> attacker
+    }
+  }
+
   fun processDeclareAttack(
     state: GameState,
     command: DeclareAttackCommand,
@@ -1008,7 +1049,21 @@ internal class BattleResolver(
   }
 
   private fun moveToStep(state: GameState, step: BattleStep): GameTransition {
-    return GameTransition(emptyList(), emptyList())
+    val battle = state.battle ?: return GameTransition(emptyList(), emptyList())
+    if (battle.step == step) return GameTransition(emptyList(), emptyList())
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.BATTLE_STEP_CHANGED,
+      sourceCardId = battle.attackerId,
+      payload = GameEventPayload.BattleStepChangedPayload(
+        previousStep = battle.step,
+        newStep = step,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    return GameTransition(listOf(event), emptyList())
   }
 
   private fun endBattle(state: GameState, battle: BattleState, outcome: BattleOutcome): GameTransition {

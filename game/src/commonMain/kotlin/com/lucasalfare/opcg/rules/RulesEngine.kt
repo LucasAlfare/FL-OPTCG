@@ -32,6 +32,7 @@ class RulesEngine(
       is EndMainPhaseCommand -> mainPhaseController.validateEndMain(state, command)
       is ActivateAbilityCommand -> effectScheduler.validateActivate(state, command, this)
       is DeclareAttackCommand -> battleResolver.validateDeclareAttack(state, command, continuousEffectProcessor)
+      is PassBattleStepCommand -> battleResolver.validatePassBattleStep(state, command, continuousEffectProcessor)
       is ActivateBlockerCommand -> battleResolver.validateActivateBlocker(state, command, continuousEffectProcessor)
       is UseCharacterCounterCommand -> battleResolver.validateCharacterCounter(
         state, command, continuousEffectProcessor
@@ -61,6 +62,8 @@ class RulesEngine(
       is ActivateBlockerCommand -> battleResolver.processActivateBlocker(
         state, command, continuousEffectProcessor, this
       )
+
+      is PassBattleStepCommand -> advanceBattleStep(state)
 
       is UseCharacterCounterCommand -> battleResolver.processCharacterCounter(state, command, continuousEffectProcessor)
       is UseEventCounterCommand -> battleResolver.processEventCounter(

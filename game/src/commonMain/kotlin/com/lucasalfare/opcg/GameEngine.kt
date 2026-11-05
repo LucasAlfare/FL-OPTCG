@@ -117,6 +117,11 @@ class GameStateReducer : EventApplier {
         )
       )
 
+      is GameEventPayload.BattleStepChangedPayload -> {
+        val battle = state.battle ?: return state
+        state.copy(battle = battle.copy(step = payload.newStep))
+      }
+
       is GameEventPayload.BlockActivatedPayload -> {
         val battle = state.battle ?: return state
         state.copy(

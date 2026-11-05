@@ -76,6 +76,11 @@ data class ConcedeCommand(
   override val playerId: PlayerId,
 ) : GameCommand
 
+@Serializable
+data class PassBattleStepCommand(
+  override val playerId: PlayerId,
+) : GameCommand
+
 data class DeckList(
   val leader: CardDefinitionId,
   val cards: List<CardDefinitionId>,
