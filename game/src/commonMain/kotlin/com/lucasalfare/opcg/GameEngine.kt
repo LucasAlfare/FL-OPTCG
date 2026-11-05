@@ -672,8 +672,8 @@ class GameEngine private constructor(
 
   private fun runSetupPhase() {
     val setupEvents = mutableListOf<GameEvent>()
-    val initialEffectsResult = processInitialLeaderEffects(setupEvents)
-    if (initialEffectsResult != null) return
+    val initialEffectsCompleted = processInitialLeaderEffects(setupEvents)
+    if (!initialEffectsCompleted) return
     advanceToOpeningHand(setupEvents)
     recordAutoEntry(setupEvents)
   }
