@@ -1,5 +1,6 @@
 package com.lucasalfare.opcg
 
+import com.lucasalfare.opcg.rules.GameTransition
 import com.lucasalfare.opcg.rules.ProgramRequest
 import com.lucasalfare.opcg.rules.RuleViolation
 import com.lucasalfare.opcg.rules.RulesEngine
@@ -1044,28 +1045,45 @@ class GameEngine private constructor(
   private fun drainAutomaticWork(accumulated: MutableList<GameEvent>): CommandResult? {
     var iterations = 0
     val maxIterations = 1000
-    while (iterations++ < maxIterations) {
-      if (state.pendingChoices.isNotEmpty()) break
-      if (state.status == GameStatus.FINISHED) break
+    var processedEventCount = 0
 
-      val autoEvents = rulesEngine.processEvents(state, accumulated.takeLast(accumulated.size))
+    while (iterations++ < maxIterations) {
+      if (state.pendingChoices.isNotEmpty()) return null
+      if (state.status == GameStatus.FINISHED) return null
+
+      val newEvents = if (processedEventCount < accumulated.size) {
+        accumulated.subList(processedEventCount, accumulated.size).toList()
+      } else {
+        emptyList()
+      }
+      processedEventCount = accumulated.size
+
+      val autoEvents = if (newEvents.isNotEmpty()) {
+        rulesEngine.processEvents(state, newEvents)
+      } else {
+        GameTransition(emptyList(), emptyList())
+      }
       val autoRules = rulesEngine.processAutomaticRules(state)
 
-      val hasAutoEventWork = autoEvents.events.isNotEmpty() || autoEvents.programsToRun.isNotEmpty()
-      val hasAutoRuleWork = autoRules.events.isNotEmpty() || autoRules.programsToRun.isNotEmpty()
+      val hasWork =
+        autoEvents.events.isNotEmpty() || autoEvents.programsToRun.isNotEmpty() || autoRules.events.isNotEmpty() || autoRules.programsToRun.isNotEmpty()
 
-      if (!hasAutoEventWork && !hasAutoRuleWork) break
+      if (!hasWork) return null
 
       for (transition in listOf(autoEvents, autoRules)) {
         if (transition.events.isNotEmpty()) {
           state = reducer.apply(state, transition.events)
           accumulated += transition.events
         }
+
         for (request in transition.programsToRun) {
+          if (state.pendingChoices.isNotEmpty()) break
           val vmResult = runVmStart(request, accumulated)
           if (vmResult is CommandResult.Failed) return vmResult
+          if (state.pendingChoices.isNotEmpty()) break
         }
-        if (transition.choiceToResume != null) {
+
+        if (transition.choiceToResume != null && state.pendingChoices.isEmpty()) {
           val choice = transition.choiceToResume
           val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }
           if (frame != null) {
@@ -1073,9 +1091,31 @@ class GameEngine private constructor(
             if (vmResult is CommandResult.Failed) return vmResult
           }
         }
+
+        if (state.pendingChoices.isNotEmpty()) break
       }
     }
-    return null
+
+    val error = VmError(
+      code = "AUTOMATIC_WORK_LIMIT",
+      message = "Exceeded maximum automatic processing iterations",
+      instructionPointer = 0,
+    )
+    val seq = state.lastEventSequence + 1
+    val failEvent = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.EFFECT_FAILED,
+      sourceCardId = null,
+      payload = GameEventPayload.EffectFailedPayload(
+        effectId = EffectId("${state.id.value}:auto-limit:$seq"),
+        errorCode = error.code,
+      ),
+      visibility = EventVisibility.PUBLIC,
+    )
+    state = reducer.apply(state, listOf(failEvent))
+    accumulated += failEvent
+    return CommandResult.Failed(error, accumulated.toList(), state.lastEventSequence)
   }
 
   private fun buildEntry(command: GameCommand?, events: List<GameEvent>): GameLogEntry {
