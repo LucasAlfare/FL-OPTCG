@@ -101,7 +101,15 @@ data class GameFormat(
   val enforceLeaderColors: Boolean,
   val bannedCardNumbers: Set<String>,
   val restrictedCardNumbers: Map<String, Int>,
-)
+) {
+  init {
+    require(id.isNotBlank()) { "GameFormat.id must not be blank" }
+    require(leaderCount >= 1) { "GameFormat.leaderCount must be >= 1, got $leaderCount" }
+    require(mainDeckSize >= 1) { "GameFormat.mainDeckSize must be >= 1, got $mainDeckSize" }
+    require(donDeckSize >= 0) { "GameFormat.donDeckSize must be >= 0, got $donDeckSize" }
+    require(maximumCopies >= 1) { "GameFormat.maximumCopies must be >= 1, got $maximumCopies" }
+  }
+}
 
 data class DeckViolation(
   val code: String,

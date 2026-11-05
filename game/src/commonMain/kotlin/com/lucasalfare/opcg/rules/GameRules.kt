@@ -31,6 +31,8 @@ internal class DeckValidator(
   private val cardCatalog: CardCatalog,
 ) {
 
+  private val programValidator = CardProgramValidator()
+
   fun validate(deck: DeckList, format: GameFormat): DeckValidationResult = validate(deck, format, emptyList())
 
   fun validate(
@@ -40,6 +42,16 @@ internal class DeckValidator(
   ): DeckValidationResult {
     val effectiveFormat = applyModifiers(format, modifiers)
     val violations = mutableListOf<DeckViolation>()
+
+    if (effectiveFormat.leaderCount != 1) {
+      violations += DeckViolation(
+        code = "UNSUPPORTED_LEADER_COUNT",
+        message = "Engine currently supports exactly one leader per deck, but format ${effectiveFormat.id} declares ${effectiveFormat.leaderCount}",
+        cardNumber = null,
+        expected = 1,
+        actual = effectiveFormat.leaderCount,
+      )
+    }
 
     val leaderDef = cardCatalog.get(deck.leader)
     if (leaderDef == null) {
@@ -69,6 +81,7 @@ internal class DeckValidator(
           actual = null,
         )
       }
+      violations += validatePrograms(leaderDef)
     }
 
     val mainSize = deck.cards.size
@@ -96,6 +109,7 @@ internal class DeckValidator(
     val allowedMainCategories = setOf(CardCategory.CHARACTER, CardCategory.EVENT, CardCategory.STAGE)
     val mainNumberCounts = mutableMapOf<String, Int>()
     val mainColors = mutableSetOf<CardColor>()
+    val validatedMainDefs = mutableSetOf<CardDefinitionId>()
 
     for (defId in deck.cards) {
       val def = cardCatalog.get(defId)
@@ -129,6 +143,9 @@ internal class DeckValidator(
           actual = null,
         )
       }
+      if (validatedMainDefs.add(defId)) {
+        violations += validatePrograms(def)
+      }
     }
 
     for ((number, count) in mainNumberCounts) {
@@ -159,6 +176,8 @@ internal class DeckValidator(
     }
 
     val donNumberCounts = mutableMapOf<String, Int>()
+    val validatedDonDefs = mutableSetOf<CardDefinitionId>()
+
     for (defId in deck.donDeck) {
       val def = cardCatalog.get(defId)
       if (def == null) {
@@ -190,6 +209,9 @@ internal class DeckValidator(
           actual = null,
         )
       }
+      if (validatedDonDefs.add(defId)) {
+        violations += validatePrograms(def)
+      }
     }
 
     for ((number, count) in donNumberCounts) {
@@ -207,6 +229,20 @@ internal class DeckValidator(
     }
 
     return DeckValidationResult(valid = violations.isEmpty(), violations = violations)
+  }
+
+  private fun validatePrograms(def: CardDefinition): List<DeckViolation> {
+    val issues = programValidator.validateDefinition(def).issues
+    if (issues.isEmpty()) return emptyList()
+    return issues.map { issue ->
+      DeckViolation(
+        code = "INVALID_PROGRAM_${issue.code}",
+        message = "Card ${def.number} program invalid at ${if (issue.path.isEmpty()) "root" else issue.path.joinToString(".")}: ${issue.message}",
+        cardNumber = def.number,
+        expected = null,
+        actual = null,
+      )
+    }
   }
 
   private fun applyModifiers(format: GameFormat, modifiers: List<DeckRuleModifier>): GameFormat {

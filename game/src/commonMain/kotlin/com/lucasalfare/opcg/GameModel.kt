@@ -451,7 +451,33 @@ data class GameManifest(
   val rulesVersion: String, val cardCatalogVersion: String, val cardCatalogHash: String,
   val instructionSetVersion: String, val vmVersion: String, val randomAlgorithm: String,
   val gameFormatId: String,
-)
+) {
+  fun differencesFrom(other: GameManifest): List<String> {
+    val diffs = mutableListOf<String>()
+    if (rulesVersion != other.rulesVersion) {
+      diffs += "rulesVersion (stored=$rulesVersion, runtime=${other.rulesVersion})"
+    }
+    if (cardCatalogVersion != other.cardCatalogVersion) {
+      diffs += "cardCatalogVersion (stored=$cardCatalogVersion, runtime=${other.cardCatalogVersion})"
+    }
+    if (cardCatalogHash != other.cardCatalogHash) {
+      diffs += "cardCatalogHash (stored=$cardCatalogHash, runtime=${other.cardCatalogHash})"
+    }
+    if (instructionSetVersion != other.instructionSetVersion) {
+      diffs += "instructionSetVersion (stored=$instructionSetVersion, runtime=${other.instructionSetVersion})"
+    }
+    if (vmVersion != other.vmVersion) {
+      diffs += "vmVersion (stored=$vmVersion, runtime=${other.vmVersion})"
+    }
+    if (randomAlgorithm != other.randomAlgorithm) {
+      diffs += "randomAlgorithm (stored=$randomAlgorithm, runtime=${other.randomAlgorithm})"
+    }
+    if (gameFormatId != other.gameFormatId) {
+      diffs += "gameFormatId (stored=$gameFormatId, runtime=${other.gameFormatId})"
+    }
+    return diffs
+  }
+}
 
 @Serializable
 data class GameSetupState(

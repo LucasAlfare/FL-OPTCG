@@ -246,6 +246,7 @@ class GameStateReducer : EventApplier {
         else -> card.enteredPlayTurn
       }
       state.cards + (cardId to card.copy(
+        objectId = payload.newObjectId ?: card.objectId,
         orientation = payload.orientation,
         faceState = payload.faceState,
         visibility = payload.visibility,
@@ -527,13 +528,24 @@ class GameEngine private constructor(
     }
 
     fun restore(
-      log: GameLog, cardCatalog: CardCatalog, rulesEngine: RulesEngine,
-      virtualMachine: VirtualMachine, reducer: GameStateReducer, history: GameHistory,
+      log: GameLog,
+      manifest: GameManifest,
+      cardCatalog: CardCatalog,
+      rulesEngine: RulesEngine,
+      virtualMachine: VirtualMachine,
+      reducer: GameStateReducer,
+      history: GameHistory,
     ): GameEngine {
-      val stored = log.manifest
-      require(stored.rulesVersion == log.manifest.rulesVersion) { "Rules version mismatch" }
-      require(stored.cardCatalogVersion == cardCatalog.version) { "Card catalog version mismatch" }
-      require(stored.cardCatalogHash == cardCatalog.hash) { "Card catalog hash mismatch" }
+      require(manifest.cardCatalogVersion == cardCatalog.version) {
+        "Runtime manifest catalog version ${manifest.cardCatalogVersion} does not match supplied catalog ${cardCatalog.version}"
+      }
+      require(manifest.cardCatalogHash == cardCatalog.hash) {
+        "Runtime manifest catalog hash ${manifest.cardCatalogHash} does not match supplied catalog ${cardCatalog.hash}"
+      }
+      val differences = log.manifest.differencesFrom(manifest)
+      require(differences.isEmpty()) {
+        "Incompatible game manifest: ${differences.joinToString("; ")}"
+      }
       history.load(log)
       val base = log.snapshots.lastOrNull() ?: log.initialSnapshot
       val state = history.replay(base, log.entries)
@@ -745,7 +757,8 @@ class GameEngine private constructor(
           payload = GameEventPayload.CardMovedPayload(
             cardId = cardId, fromPlayerId = playerId, fromZone = ZoneType.DECK,
             toPlayerId = playerId, toZone = ZoneType.HAND, destinationIndex = null,
-            newObjectId = null, orientation = CardOrientation.NOT_APPLICABLE,
+            newObjectId = CardObjectId("${state.id.value}:obj:$seq:${cardId.value}"),
+            orientation = CardOrientation.NOT_APPLICABLE,
             faceState = FaceState.FACE_DOWN, visibility = CardVisibility.OWNER_ONLY,
           ),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
@@ -801,7 +814,8 @@ class GameEngine private constructor(
           payload = GameEventPayload.CardMovedPayload(
             cardId = cardId, fromPlayerId = playerId, fromZone = ZoneType.DECK,
             toPlayerId = playerId, toZone = ZoneType.LIFE, destinationIndex = null,
-            newObjectId = null, orientation = CardOrientation.NOT_APPLICABLE,
+            newObjectId = CardObjectId("${state.id.value}:obj:$seq:${cardId.value}"),
+            orientation = CardOrientation.NOT_APPLICABLE,
             faceState = FaceState.FACE_DOWN, visibility = CardVisibility.OWNER_ONLY,
           ),
           visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
@@ -818,7 +832,7 @@ class GameEngine private constructor(
             playerId = playerId, addedCardIds = toDraw,
             removedCardIds = emptyList(), destinationZone = null,
           ),
-          visibility = EventVisibility.PUBLIC,
+          visibility = EventVisibility.PRIVATE_TO_PLAYER(playerId),
         )
         state = reducer.apply(state, listOf(lifeChangedEvent))
         accumulated += lifeChangedEvent
@@ -1052,14 +1066,23 @@ class GameEngine private constructor(
   private fun collectPublicEvents(viewerId: PlayerId): List<GameEvent> {
     val log = history.log ?: return emptyList()
     val allEvents = log.initialEvents + log.entries.flatMap { it.events }
-    return allEvents.filter { event ->
-      when (val vis = event.visibility) {
-        is EventVisibility.PUBLIC -> true
-        is EventVisibility.PRIVATE_TO_PLAYER -> vis.playerId == viewerId
-        is EventVisibility.PRIVATE_TO_PLAYERS -> viewerId in vis.playerIds
-        is EventVisibility.INTERNAL -> false
-      }
+    return allEvents.mapNotNull { event ->
+      if (!isEventVisibleTo(event, viewerId)) return@mapNotNull null
+      if (isHiddenInfoEvent(event)) return@mapNotNull null
+      event
     }
+  }
+
+  private fun isEventVisibleTo(event: GameEvent, viewerId: PlayerId): Boolean = when (val vis = event.visibility) {
+    is EventVisibility.PUBLIC -> true
+    is EventVisibility.PRIVATE_TO_PLAYER -> vis.playerId == viewerId
+    is EventVisibility.PRIVATE_TO_PLAYERS -> viewerId in vis.playerIds
+    is EventVisibility.INTERNAL -> false
+  }
+
+  private fun isHiddenInfoEvent(event: GameEvent): Boolean = when (event.payload) {
+    is GameEventPayload.DeckShuffledPayload -> true
+    else -> false
   }
 
   private fun appendTransaction(command: GameCommand?, events: List<GameEvent>) {
