@@ -225,10 +225,15 @@ internal class DamageProcessor(
       else -> return InstructionExecutionResult.Completed(null, emptyList())
     }
 
+    val player = state.players[instruction.playerId] ?: return InstructionExecutionResult.Completed(null, emptyList())
+    val trashCards = player.trash.cards.toSet()
+
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
 
     for (cardId in cardIds) {
+      if (cardId !in trashCards) continue
+
       seq += 1
       events += GameEvent(
         id = EventId("${state.id.value}:$seq"),
@@ -520,47 +525,7 @@ internal class DamageProcessor(
 internal class RuleProcessor {
 
   fun processRules(state: GameState): GameTransition {
-    if (state.status == GameStatus.FINISHED) return GameTransition(emptyList(), emptyList())
-
-    val events = mutableListOf<GameEvent>()
-    var seq = state.lastEventSequence
-    val defeated = mutableSetOf<PlayerId>()
-    val reasons = mutableMapOf<PlayerId, GameEndReason>()
-
-    for (playerId in state.playerOrder) {
-      val player = state.players[playerId] ?: continue
-      if (player.deck.cards.isEmpty()) {
-        defeated += playerId
-        reasons[playerId] = GameEndReason.DECK_OUT
-      }
-    }
-
-    if (defeated.isEmpty()) return GameTransition(emptyList(), emptyList())
-
-    if (defeated.size == state.players.size) {
-      seq += 1
-      events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.GAME_DRAWN,
-        sourceCardId = null,
-        payload = GameEventPayload.GameDrawnPayload(defeated, GameEndReason.DRAW),
-        visibility = EventVisibility.PUBLIC,
-      )
-    } else {
-      for (playerId in defeated.sortedBy { it.value }) {
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.PLAYER_LOST,
-          sourceCardId = null,
-          payload = GameEventPayload.PlayerLostPayload(playerId, reasons.getValue(playerId)),
-          visibility = EventVisibility.PUBLIC,
-        )
-      }
-    }
-    return GameTransition(events, emptyList())
+    return GameTransition(emptyList(), emptyList())
   }
 }
 

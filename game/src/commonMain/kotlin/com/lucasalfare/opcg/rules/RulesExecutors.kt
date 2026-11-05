@@ -19,9 +19,22 @@ internal class ZoneInstructionExecutor {
         else -> return fail("INVALID_VALUE", "Draw amount must be integer")
       }
     }.coerceAtLeast(0)
+    if (amount == 0) return InstructionExecutionResult.Completed(null, emptyList())
     val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
-    val drawn = player.deck.cards.take(amount)
-    if (drawn.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val available = player.deck.cards
+    if (available.isEmpty()) {
+      val seq = state.lastEventSequence + 1
+      val lostEvent = GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.PLAYER_LOST,
+        sourceCardId = null,
+        payload = GameEventPayload.PlayerLostPayload(instruction.playerId, GameEndReason.DECK_OUT),
+        visibility = EventVisibility.PUBLIC,
+      )
+      return InstructionExecutionResult.Completed(null, listOf(lostEvent))
+    }
+    val drawn = available.take(amount)
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
     for (cardId in drawn) {
@@ -55,6 +68,17 @@ internal class ZoneInstructionExecutor {
       payload = GameEventPayload.CardsDrawnPayload(instruction.playerId, drawn),
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
+    if (drawn.size < amount) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.PLAYER_LOST,
+        sourceCardId = null,
+        payload = GameEventPayload.PlayerLostPayload(instruction.playerId, GameEndReason.DECK_OUT),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
     return InstructionExecutionResult.Completed(null, events)
   }
 
@@ -72,13 +96,17 @@ internal class ZoneInstructionExecutor {
       null -> return fail("MISSING_VARIABLE", "MoveCards source missing")
       else -> return fail("INVALID_SOURCE", "MoveCards source must be cards")
     }
+    val toZone = instruction.destination.zone
+    if (toZone == ZoneType.ATTACHED_DON) {
+      return fail("INVALID_DESTINATION", "ATTACHED_DON is not a valid MoveCards destination")
+    }
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
     for (cardId in cardIds) {
-      val located = locateCard(state, cardId) ?: continue
+      if (state.cards[cardId] == null) return fail("UNKNOWN_CARD", "Card $cardId not found")
+      val located = locateCard(state, cardId) ?: return fail("CARD_NOT_LOCATED", "Card $cardId is not in any zone")
       val fromZone = located.second
-      val ownerId = state.cards[cardId]?.ownerId ?: instruction.destination.playerId
-      val toZone = instruction.destination.zone
+      val ownerId = state.cards[cardId]!!.ownerId
 
       if (informationManager.needsTemporaryReveal(fromZone, toZone)) {
         seq += 1
@@ -136,7 +164,7 @@ internal class ZoneInstructionExecutor {
     if (amountResult is EvaluationResult.Failed) return InstructionExecutionResult.Failed(amountResult.error)
     val amount = (amountResult as EvaluationResult.Success).value.let {
       (it as? StoredValue.IntegerValue)?.value ?: return fail("INVALID_VALUE", "Amount must be integer")
-    }
+    }.coerceAtLeast(0)
     val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
     val selected = player.hand.cards.take(amount)
     val events = mutableListOf<GameEvent>()
