@@ -56,7 +56,7 @@ internal class ZoneInstructionExecutor {
           faceState = FaceState.FACE_DOWN,
           visibility = CardVisibility.OWNER_ONLY,
         ),
-        visibility = EventVisibility.PUBLIC,
+        visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
       )
     }
     seq += 1
@@ -76,7 +76,7 @@ internal class ZoneInstructionExecutor {
         type = GameEventType.PLAYER_LOST,
         sourceCardId = null,
         payload = GameEventPayload.PlayerLostPayload(instruction.playerId, GameEndReason.DECK_OUT),
-        visibility = EventVisibility.PUBLIC,
+        visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
       )
     }
     return InstructionExecutionResult.Completed(null, events)

@@ -748,14 +748,32 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       ZoneType.DON_DECK -> player.donDeck.cards.take(amount)
       else -> emptyList()
     }
-    val seq = state.lastEventSequence + 1
-    val event = GameEvent(
+
+    val viewer = context.controllerId
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    seq += 1
+    events += GameEvent(
       id = EventId("${state.id.value}:$seq"), sequence = seq,
       type = GameEventType.CARD_REVEALED, sourceCardId = context.sourceCardId,
-      payload = GameEventPayload.CardRevealedPayload(cards, CardVisibility.PLAYERS(setOf(instruction.playerId))),
-      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+      payload = GameEventPayload.CardRevealedPayload(cards, CardVisibility.PLAYERS(setOf(viewer))),
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(viewer),
     )
-    return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(cards), listOf(event))
+
+    for (cardId in cards) {
+      val card = state.cards[cardId] ?: continue
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"), sequence = seq,
+        type = GameEventType.CARD_STATE_CHANGED, sourceCardId = cardId,
+        payload = GameEventPayload.CardStateChangedPayload(cardId, card.orientation, FaceState.FACE_UP),
+        visibility = EventVisibility.PRIVATE_TO_PLAYER(viewer),
+      )
+    }
+
+    return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(cards), events)
   }
 
   private fun executeRevealCards(
