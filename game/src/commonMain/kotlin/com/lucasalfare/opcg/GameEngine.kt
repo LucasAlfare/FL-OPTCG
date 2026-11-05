@@ -693,6 +693,14 @@ class GameEngine private constructor(
       transactionEvents += transition.events
     }
 
+    if (command is EndMainPhaseCommand) {
+      val advance = rulesEngine.advancePhase(state)
+      if (advance.events.isNotEmpty()) {
+        state = reducer.apply(state, advance.events)
+        transactionEvents += advance.events
+      }
+    }
+
     if (transition.choiceToResume != null) {
       val choice = transition.choiceToResume
       val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }

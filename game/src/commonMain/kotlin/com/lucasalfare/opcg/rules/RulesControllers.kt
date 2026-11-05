@@ -28,8 +28,6 @@ internal class TurnController {
     events += refresh.events
     seq = refresh.lastSequence
 
-    phaseChanged(state, playerId, null, GamePhase.REFRESH, seq)
-
     val draw = runDraw(state, playerId, turnNumber, seq)
     events += draw.events
     seq = draw.lastSequence
@@ -70,7 +68,7 @@ internal class TurnController {
       }
 
       GamePhase.MAIN -> endMainPhase(state, turn.playerId)
-      GamePhase.END -> finishEndPhase(state, turn.playerId, continuous)
+      GamePhase.END -> finishEndPhase(state, turn.playerId, continuous, evaluator)
     }
   }
 
@@ -87,24 +85,23 @@ internal class TurnController {
     state: GameState,
     playerId: PlayerId,
     continuous: ContinuousEffectProcessor,
+    evaluator: ProgramEvaluator,
   ): GameTransition {
     val turn = state.turn ?: return GameTransition(emptyList(), emptyList())
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
+    var activeEffects = state.activeEffects
 
-    val expired = continuous.effectsToExpire(
-      state,
-      listOf(
-        GameEvent(
-          id = EventId("preview"),
-          sequence = 0,
-          type = GameEventType.TURN_ENDED,
-          sourceCardId = null,
-          payload = GameEventPayload.TurnEndedPayload(turn.number, playerId),
-          visibility = EventVisibility.PUBLIC,
-        ),
-      ),
+    val preview = GameEvent(
+      id = EventId("${state.id.value}:${seq + 1}"),
+      sequence = seq + 1,
+      type = GameEventType.TURN_ENDED,
+      sourceCardId = null,
+      payload = GameEventPayload.TurnEndedPayload(turn.number, playerId),
+      visibility = EventVisibility.PUBLIC,
     )
+
+    val expired = continuous.effectsToExpire(state, listOf(preview))
     for (effect in expired) {
       seq += 1
       events += GameEvent(
@@ -115,6 +112,7 @@ internal class TurnController {
         payload = GameEventPayload.ModifierExpiredPayload(effect.id),
         visibility = EventVisibility.PUBLIC,
       )
+      activeEffects = activeEffects.filterNot { it.id == effect.id }
     }
 
     seq += 1
@@ -129,17 +127,17 @@ internal class TurnController {
 
     val nextPlayer = state.playerOrder.first { it != playerId }
     val nextTurnNumber = turn.number + 1
-    seq += 1
-    events += GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
-      type = GameEventType.TURN_STARTED,
-      sourceCardId = null,
-      payload = GameEventPayload.TurnStartedPayload(nextTurnNumber, nextPlayer),
-      visibility = EventVisibility.PUBLIC,
+
+    val stateAfterEnd = state.copy(
+      turn = null,
+      activeEffects = activeEffects,
+      lastEventSequence = seq,
     )
 
-    return GameTransition(events, emptyList())
+    val nextTurn = startTurn(stateAfterEnd, nextPlayer, nextTurnNumber, continuous, evaluator)
+    events += nextTurn.events
+
+    return GameTransition(events = events, programsToRun = emptyList())
   }
 
   private data class PhaseResult(val events: List<GameEvent>, val lastSequence: Long)
@@ -218,7 +216,7 @@ internal class TurnController {
           sequence = seq,
           type = GameEventType.CARD_STATE_CHANGED,
           sourceCardId = donId,
-          payload = GameEventPayload.CardStateChangedPayload(donId, CardOrientation.RESTED, FaceState.FACE_UP),
+          payload = GameEventPayload.CardStateChangedPayload(donId, CardOrientation.ACTIVE, FaceState.FACE_UP),
           visibility = EventVisibility.PUBLIC,
         )
       }
