@@ -63,6 +63,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   fun process(state: GameState, command: GameCommand): GameTransition {
     val validation = validate(state, command)
     if (!validation.valid) return GameTransition(events = emptyList(), programsToRun = emptyList())
+    ruleProcessor.resetLoopDetection()
     return when (command) {
       is PlayCardCommand -> mainPhaseController.processPlayCard(
         state, command, cardCatalog, continuousEffectProcessor, costProcessor, this

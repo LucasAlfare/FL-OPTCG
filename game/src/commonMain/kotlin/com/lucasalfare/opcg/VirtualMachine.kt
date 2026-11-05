@@ -224,6 +224,12 @@ class VirtualMachine(
     if (frame.status != ProgramStatus.SUSPENDED || frame.pendingChoiceId == null) {
       return fail(frame, state, emptyList(), "INVALID_RESUME", "Frame is not suspended")
     }
+    if (frame.stepCount >= MAX_INSTRUCTION_STEPS) {
+      return failAndEmit(
+        frame, state, emptyList(),
+        VmError("STEP_LIMIT_EXCEEDED", "Program exceeded $MAX_INSTRUCTION_STEPS steps", frame.instructionPointer),
+      )
+    }
     if (choice.choiceId != frame.pendingChoiceId) {
       return fail(frame, state, emptyList(), "CHOICE_MISMATCH", "Choice id does not match pending choice")
     }

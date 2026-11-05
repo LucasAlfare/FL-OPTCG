@@ -522,9 +522,30 @@ internal class DamageProcessor(
   )
 }
 
-internal class RuleProcessor {
+internal class RuleProcessor(
+  private val loopProcessor: LoopProcessor = LoopProcessor(),
+) {
+
+  private val seenSignatures = LinkedHashSet<String>()
+  private val maxHistory = 128
+
+  fun resetLoopDetection() {
+    seenSignatures.clear()
+  }
 
   fun processRules(state: GameState): GameTransition {
+    if (state.status == GameStatus.FINISHED) return GameTransition(emptyList(), emptyList())
+    if (state.pendingChoices.isNotEmpty()) return GameTransition(emptyList(), emptyList())
+
+    val signature = loopProcessor.signatureOf(state)
+    if (signature in seenSignatures) {
+      seenSignatures.clear()
+      return GameTransition(loopProcessor.resolve(state, emptySet(), emptyMap()).events, emptyList())
+    }
+    seenSignatures += signature
+    while (seenSignatures.size > maxHistory) {
+      seenSignatures.remove(seenSignatures.first())
+    }
     return GameTransition(emptyList(), emptyList())
   }
 }
@@ -537,7 +558,16 @@ internal class LoopProcessor {
     val draw: Boolean,
   )
 
-  fun signatureOf(state: GameState): String = GameSerialization.encodeState(state.copy(lastEventSequence = 0))
+  fun signatureOf(state: GameState): String {
+    val normalized = state.copy(
+      lastEventSequence = 0,
+      abilityUsage = emptyMap(),
+      activeEffects = state.activeEffects.map { it.copy(timestampSequence = 0) }.sortedBy { it.id.value },
+      activePrograms = state.activePrograms.map { it.copy(stepCount = 0) }.sortedBy { it.id.value },
+      randomState = state.randomState.copy(drawCount = 0),
+    )
+    return GameSerialization.encodeState(normalized)
+  }
 
   fun isRepeated(state: GameState, seenSignatures: Collection<String>): Boolean {
     return signatureOf(state) in seenSignatures
