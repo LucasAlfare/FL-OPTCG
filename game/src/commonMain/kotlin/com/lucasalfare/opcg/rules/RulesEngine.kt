@@ -32,7 +32,11 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     }
     return when (command) {
       is PlayCardCommand -> mainPhaseController.validatePlayCard(
-        state, command, cardCatalog, continuousEffectProcessor, costProcessor
+        state,
+        command,
+        cardCatalog,
+        continuousEffectProcessor,
+        costProcessor
       )
 
       is GiveDonCommand -> mainPhaseController.validateGiveDon(state, command, continuousEffectProcessor)
@@ -45,7 +49,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         state, command, continuousEffectProcessor
       )
 
-      is UseEventCounterCommand -> battleResolver.validateEventCounter(state, command, continuousEffectProcessor)
+      is UseEventCounterCommand -> battleResolver.validateEventCounter(
+        state, command, continuousEffectProcessor, this
+      )
+
       is SubmitChoiceCommand -> validateSubmitChoice(state, command)
       is ResolveMulliganCommand -> validateMulligan(state, command)
       is ConcedeCommand -> validateConcede(state, command)
@@ -76,7 +83,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is PassBattleStepCommand -> advanceBattleStep(state)
       is UseCharacterCounterCommand -> battleResolver.processCharacterCounter(state, command, continuousEffectProcessor)
       is UseEventCounterCommand -> battleResolver.processEventCounter(
-        state, command, continuousEffectProcessor, costProcessor, this
+        state, command, continuousEffectProcessor, this
       )
 
       is SubmitChoiceCommand -> processSubmitChoice(state, command)
@@ -106,6 +113,9 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
 
   fun effectiveController(state: GameState, cardId: CardInstanceId): PlayerId? =
     continuousEffectProcessor.effectiveController(state, cardId)
+
+  fun selectCardIds(selector: CardSelector, state: GameState, context: EffectContext): List<CardInstanceId>? =
+    (selectCards(selector, state, context, emptyMap()) as? EvaluationResult.Success)?.value
 
   override fun execute(
     instruction: Instruction, state: GameState, context: EffectContext,

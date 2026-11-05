@@ -477,6 +477,7 @@ internal object RandomSupport {
 internal class BattleResolver(
   private val cardCatalog: CardCatalog,
 ) {
+  private val costResolver = CostResolver()
 
   fun validateDeclareAttack(
     state: GameState,
@@ -549,8 +550,8 @@ internal class BattleResolver(
     command: PassBattleStepCommand,
     continuous: ContinuousEffectProcessor,
   ): ValidationResult {
-    val battle = state.battle
-      ?: return ValidationResult(false, listOf(RuleViolation("NO_BATTLE", "No battle in progress")))
+    val battle =
+      state.battle ?: return ValidationResult(false, listOf(RuleViolation("NO_BATTLE", "No battle in progress")))
     val expected = expectedBattleActor(state, battle, continuous)
     if (expected != null && command.playerId != expected) {
       return ValidationResult(
@@ -824,6 +825,7 @@ internal class BattleResolver(
     state: GameState,
     command: UseEventCounterCommand,
     continuous: ContinuousEffectProcessor,
+    evaluator: RulesEngine,
   ): ValidationResult {
     val violations = mutableListOf<RuleViolation>()
     val battle = state.battle
@@ -849,6 +851,8 @@ internal class BattleResolver(
       ?.firstOrNull { it.timing == ActivationTiming.COUNTER_STEP }
     if (counterAbility == null) {
       violations += RuleViolation("NO_COUNTER_ABILITY", "Event has no Counter Step ability")
+    } else if (costResolver.preview(state, command.playerId, counterAbility.cost, command.cardId, evaluator) == null) {
+      violations += RuleViolation("COST_UNPAID", "Unable to pay Counter cost")
     }
     if (battle != null) {
       val attackerController = state.cards[battle.attackerId]?.let {
@@ -865,7 +869,6 @@ internal class BattleResolver(
     state: GameState,
     command: UseEventCounterCommand,
     continuous: ContinuousEffectProcessor,
-    costProcessor: CostProcessor,
     evaluator: RulesEngine,
   ): GameTransition {
     val card = state.cards[command.cardId] ?: return GameTransition(emptyList(), emptyList())
@@ -873,39 +876,14 @@ internal class BattleResolver(
     val ability = def.abilities.filterIsInstance<ActivatedAbilityDefinition>()
       .firstOrNull { it.timing == ActivationTiming.COUNTER_STEP } ?: return GameTransition(emptyList(), emptyList())
 
-    val events = mutableListOf<GameEvent>()
-    var seq = state.lastEventSequence
+    val payments =
+      costResolver.preview(state, command.playerId, ability.cost, command.cardId, evaluator) ?: return GameTransition(
+        emptyList(),
+        emptyList()
+      )
+    val events = costResolver.events(state, command.playerId, payments).toMutableList()
+    var seq = state.lastEventSequence + events.size
     val programs = mutableListOf<ProgramRequest>()
-
-    when (val cost = ability.cost) {
-      is Cost.NoCost -> Unit
-      is Cost.RestDonCost -> {
-        val amount = when (val r = evaluator.evaluateValue(
-          cost.amount,
-          state,
-          EffectContext(state.id, command.playerId, command.cardId, ability.id, null),
-          emptyMap(),
-        )) {
-          is EvaluationResult.Success -> (r.value as? StoredValue.IntegerValue)?.value ?: 0
-          is EvaluationResult.Failed -> 0
-        }
-        val dons = costProcessor.selectActiveDon(state, command.playerId, amount)
-        if (dons.size < amount) return GameTransition(emptyList(), emptyList())
-        if (dons.isNotEmpty()) {
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.DON_RESTED,
-            sourceCardId = null,
-            payload = GameEventPayload.DonRestedPayload(command.playerId, dons),
-            visibility = EventVisibility.PUBLIC,
-          )
-        }
-      }
-
-      else -> Unit
-    }
 
     seq += 1
     events += GameEvent(
@@ -1087,6 +1065,7 @@ internal class BattleResolver(
 internal class EffectScheduler(
   private val cardCatalog: CardCatalog,
 ) {
+  private val costResolver = CostResolver()
 
   private val ignoredTriggerTypes = setOf(
     GameEventType.PROGRAM_FRAME_CHANGED,
@@ -1402,7 +1381,7 @@ internal class EffectScheduler(
       val ability: ActivatedAbilityDefinition,
       val controllerId: PlayerId,
       val objectId: CardObjectId,
-      val costPayment: List<CardInstanceId>,
+      val costPayment: List<CostPayment>,
     ) : AbilityResolveResult()
 
     data class Invalid(val violations: List<RuleViolation>) : AbilityResolveResult()
@@ -1462,16 +1441,9 @@ internal class EffectScheduler(
         violations += RuleViolation("USAGE_LIMIT", "Ability already used this turn")
       }
     }
-    val costPayment = mutableListOf<CardInstanceId>()
-    if (ability.cost !is Cost.NoCost) {
-      val paid = payCostPreview(state, playerId, ability.cost, sourceCardId, evaluator)
-      if (paid == null) {
-        violations += RuleViolation("COST_UNPAID", "Unable to pay ability cost")
-      } else {
-        costPayment += paid
-      }
-    }
-    if (violations.isNotEmpty()) return AbilityResolveResult.Invalid(violations)
+    val costPayment = costResolver.preview(state, playerId, ability.cost, sourceCardId, evaluator)
+    if (costPayment == null) violations += RuleViolation("COST_UNPAID", "Unable to pay ability cost")
+    if (violations.isNotEmpty() || costPayment == null) return AbilityResolveResult.Invalid(violations)
     return AbilityResolveResult.Ok(sourceCardId, ability, playerId, card.objectId, costPayment)
   }
 
@@ -1526,122 +1498,13 @@ internal class EffectScheduler(
     }
   }
 
-  private fun payCostPreview(
-    state: GameState,
-    playerId: PlayerId,
-    cost: Cost,
-    sourceCardId: CardInstanceId,
-    evaluator: RulesEngine,
-  ): List<CardInstanceId>? {
-    return when (cost) {
-      is Cost.NoCost -> emptyList()
-      is Cost.RestSourceCost -> {
-        val card = state.cards[sourceCardId] ?: return null
-        if (card.orientation != CardOrientation.ACTIVE) return null
-        listOf(sourceCardId)
-      }
-
-      is Cost.RestDonCost -> {
-        val amount = evaluateCostAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
-        val player = state.players[playerId] ?: return null
-        val dons = player.cost.cards.filter { state.cards[it]?.orientation == CardOrientation.ACTIVE }
-        if (dons.size < amount) return null
-        dons.take(amount)
-      }
-
-      is Cost.ReturnDonCost -> {
-        val amount = evaluateCostAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
-        val player = state.players[playerId] ?: return null
-        if (player.cost.cards.size < amount) return null
-        player.cost.cards.take(amount)
-      }
-
-      is Cost.CombinedCost -> {
-        val all = mutableListOf<CardInstanceId>()
-        for (part in cost.costs) {
-          val paid = payCostPreview(state, playerId, part, sourceCardId, evaluator) ?: return null
-          all += paid
-        }
-        all
-      }
-
-      is Cost.TrashCardsCost -> emptyList()
-    }
-  }
-
-  private fun evaluateCostAmount(
-    state: GameState,
-    playerId: PlayerId,
-    sourceCardId: CardInstanceId,
-    amount: ValueExpr,
-    evaluator: RulesEngine,
-  ): Int? {
-    val ctx = EffectContext(state.id, playerId, sourceCardId, null, null)
-    return when (val result = evaluator.evaluateValue(amount, state, ctx, emptyMap())) {
-      is EvaluationResult.Failed -> null
-      is EvaluationResult.Success -> (result.value as? StoredValue.IntegerValue)?.value
-    }
-  }
-
   private fun activateAbility(
     state: GameState,
     resolved: AbilityResolveResult.Ok,
     evaluator: RulesEngine,
   ): GameTransition {
-    val events = mutableListOf<GameEvent>()
-    var seq = state.lastEventSequence
-
-    if (resolved.costPayment.isNotEmpty()) {
-      when (resolved.ability.cost) {
-        is Cost.RestSourceCost -> {
-          for (cardId in resolved.costPayment) {
-            val card = state.cards[cardId] ?: continue
-            seq += 1
-            events += GameEvent(
-              id = EventId("${state.id.value}:$seq"),
-              sequence = seq,
-              type = GameEventType.CARD_STATE_CHANGED,
-              sourceCardId = cardId,
-              payload = GameEventPayload.CardStateChangedPayload(cardId, CardOrientation.RESTED, card.faceState),
-              visibility = EventVisibility.PUBLIC,
-            )
-          }
-        }
-
-        is Cost.RestDonCost, is Cost.CombinedCost -> {
-          val dons = resolved.costPayment.filter { id ->
-            state.players[resolved.controllerId]?.cost?.cards?.contains(id) == true
-          }
-          if (dons.isNotEmpty()) {
-            seq += 1
-            events += GameEvent(
-              id = EventId("${state.id.value}:$seq"),
-              sequence = seq,
-              type = GameEventType.DON_RESTED,
-              sourceCardId = null,
-              payload = GameEventPayload.DonRestedPayload(resolved.controllerId, dons),
-              visibility = EventVisibility.PUBLIC,
-            )
-          }
-        }
-
-        is Cost.ReturnDonCost -> {
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.DON_RETURNED,
-            sourceCardId = null,
-            payload = GameEventPayload.DonReturnedPayload(resolved.controllerId, resolved.costPayment),
-            visibility = EventVisibility.PUBLIC,
-          )
-        }
-
-        else -> Unit
-      }
-    }
-
-    seq += 1
+    val events = costResolver.events(state, resolved.controllerId, resolved.costPayment).toMutableList()
+    val seq = state.lastEventSequence + events.size + 1
     val activationEvent = GameEvent(
       id = EventId("${state.id.value}:$seq"),
       sequence = seq,
@@ -1673,6 +1536,226 @@ internal class EffectScheduler(
   private fun usageKey(state: GameState, cardId: CardInstanceId, abilityId: AbilityId): AbilityUsageKey {
     val objectId = state.cards[cardId]?.objectId ?: CardObjectId(cardId.value)
     return AbilityUsageKey(objectId, abilityId, state.turn?.number ?: 0)
+  }
+}
+
+internal sealed class CostPayment {
+  data class RestSource(val cardId: CardInstanceId) : CostPayment()
+  data class RestDon(val donIds: List<CardInstanceId>) : CostPayment()
+  data class ReturnDon(val donIds: List<CardInstanceId>) : CostPayment()
+  data class TrashCards(val cards: List<ZonedCard>) : CostPayment()
+}
+
+internal data class ZonedCard(val cardId: CardInstanceId, val zone: ZoneType)
+
+internal class CostResolver {
+
+  fun preview(
+    state: GameState,
+    playerId: PlayerId,
+    cost: Cost,
+    sourceCardId: CardInstanceId,
+    evaluator: RulesEngine,
+  ): List<CostPayment>? = previewPart(state, playerId, cost, sourceCardId, evaluator, mutableSetOf())
+
+  fun events(state: GameState, playerId: PlayerId, payments: List<CostPayment>): List<GameEvent> {
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+
+    fun emit(
+      type: GameEventType,
+      sourceCardId: CardInstanceId?,
+      payload: GameEventPayload,
+      visibility: EventVisibility,
+    ) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = type,
+        sourceCardId = sourceCardId,
+        payload = payload,
+        visibility = visibility,
+      )
+    }
+
+    for (payment in payments) {
+      when (payment) {
+        is CostPayment.RestSource -> state.cards[payment.cardId]?.let { card ->
+          emit(
+            GameEventType.CARD_STATE_CHANGED,
+            payment.cardId,
+            GameEventPayload.CardStateChangedPayload(payment.cardId, CardOrientation.RESTED, card.faceState),
+            EventVisibility.PUBLIC,
+          )
+        }
+
+        is CostPayment.RestDon -> if (payment.donIds.isNotEmpty()) {
+          emit(
+            GameEventType.DON_RESTED,
+            null,
+            GameEventPayload.DonRestedPayload(playerId, payment.donIds),
+            EventVisibility.PUBLIC,
+          )
+        }
+
+        is CostPayment.ReturnDon -> payment.donIds.forEach { donId ->
+          emit(
+            GameEventType.CARD_MOVED,
+            donId,
+            GameEventPayload.CardMovedPayload(
+              cardId = donId,
+              fromPlayerId = playerId,
+              fromZone = ZoneType.COST,
+              toPlayerId = playerId,
+              toZone = ZoneType.DON_DECK,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_DOWN,
+              visibility = CardVisibility.OWNER_ONLY,
+            ),
+            EventVisibility.PRIVATE_TO_PLAYER(playerId),
+          )
+        }
+
+        is CostPayment.TrashCards -> payment.cards.forEach { card ->
+          emit(
+            GameEventType.CARD_MOVED,
+            card.cardId,
+            GameEventPayload.CardMovedPayload(
+              cardId = card.cardId,
+              fromPlayerId = playerId,
+              fromZone = card.zone,
+              toPlayerId = playerId,
+              toZone = ZoneType.TRASH,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_UP,
+              visibility = CardVisibility.PUBLIC,
+            ),
+            EventVisibility.PUBLIC,
+          )
+        }
+      }
+    }
+    return events
+  }
+
+  private fun previewPart(
+    state: GameState,
+    playerId: PlayerId,
+    cost: Cost,
+    sourceCardId: CardInstanceId,
+    evaluator: RulesEngine,
+    reserved: MutableSet<CardInstanceId>,
+  ): List<CostPayment>? {
+    return when (cost) {
+      is Cost.NoCost -> emptyList()
+
+      is Cost.RestSourceCost -> {
+        val card = state.cards[sourceCardId] ?: return null
+        if (card.orientation != CardOrientation.ACTIVE || !reserved.add(sourceCardId)) return null
+        listOf(CostPayment.RestSource(sourceCardId))
+      }
+
+      is Cost.RestDonCost -> {
+        val amount = costAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
+        val donIds = takeDon(state, playerId, CardOrientation.ACTIVE, amount, reserved) ?: return null
+        listOf(CostPayment.RestDon(donIds))
+      }
+
+      is Cost.ReturnDonCost -> {
+        val amount = costAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
+        val donIds = takeDon(state, playerId, null, amount, reserved) ?: return null
+        listOf(CostPayment.ReturnDon(donIds))
+      }
+
+      is Cost.TrashCardsCost -> {
+        val amount = costAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
+        val cards =
+          selectTrashCards(state, playerId, sourceCardId, cost.selector, amount, evaluator, reserved) ?: return null
+        listOf(CostPayment.TrashCards(cards))
+      }
+
+      is Cost.CombinedCost -> {
+        val all = mutableListOf<CostPayment>()
+        for (part in cost.costs) {
+          val paid = previewPart(state, playerId, part, sourceCardId, evaluator, reserved) ?: return null
+          all += paid
+        }
+        all
+      }
+    }
+  }
+
+  private fun costAmount(
+    state: GameState,
+    playerId: PlayerId,
+    sourceCardId: CardInstanceId,
+    expr: ValueExpr,
+    evaluator: RulesEngine,
+  ): Int? {
+    val ctx = EffectContext(state.id, playerId, sourceCardId, null, null)
+    val value = when (val result = evaluator.evaluateValue(expr, state, ctx, emptyMap())) {
+      is EvaluationResult.Failed -> return null
+      is EvaluationResult.Success -> (result.value as? StoredValue.IntegerValue)?.value ?: return null
+    }
+    return value.takeIf { it >= 0 }
+  }
+
+  private fun takeDon(
+    state: GameState,
+    playerId: PlayerId,
+    orientation: CardOrientation?,
+    amount: Int,
+    reserved: MutableSet<CardInstanceId>,
+  ): List<CardInstanceId>? {
+    val player = state.players[playerId] ?: return null
+    val candidates = player.cost.cards.filter { id ->
+      id !in reserved && (orientation == null || state.cards[id]?.orientation == orientation)
+    }
+    if (candidates.size < amount) return null
+    val chosen = candidates.take(amount)
+    reserved += chosen
+    return chosen
+  }
+
+  private fun selectTrashCards(
+    state: GameState,
+    playerId: PlayerId,
+    sourceCardId: CardInstanceId,
+    selector: CardSelector,
+    amount: Int,
+    evaluator: RulesEngine,
+    reserved: MutableSet<CardInstanceId>,
+  ): List<ZonedCard>? {
+    if (selector.zones.isEmpty()) return null
+    val player = state.players[playerId] ?: return null
+    val context = EffectContext(state.id, playerId, sourceCardId, null, null)
+    val matches = evaluator.selectCardIds(selector, state, context) ?: return null
+    val chosen = matches.asSequence().filter { it !in reserved && state.cards[it]?.ownerId == playerId }
+      .mapNotNull { id -> zoneOf(player, id)?.let { ZonedCard(id, it) } }.filter { it.zone in selector.zones }
+      .take(amount).toList()
+    if (chosen.size < amount) return null
+    reserved += chosen.map { it.cardId }
+    return chosen
+  }
+
+  private fun zoneOf(player: PlayerState, cardId: CardInstanceId): ZoneType? {
+    val zones = mapOf(
+      ZoneType.DECK to player.deck,
+      ZoneType.DON_DECK to player.donDeck,
+      ZoneType.HAND to player.hand,
+      ZoneType.TRASH to player.trash,
+      ZoneType.LEADER to player.leader,
+      ZoneType.CHARACTER to player.characters,
+      ZoneType.STAGE to player.stage,
+      ZoneType.COST to player.cost,
+      ZoneType.LIFE to player.life,
+    )
+    return zones.entries.firstOrNull { cardId in it.value.cards }?.key
   }
 }
 
