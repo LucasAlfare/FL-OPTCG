@@ -89,7 +89,16 @@ class GameStateReducer : EventApplier {
 
       is GameEventPayload.DonAttachedPayload -> applyDonAttached(state, payload)
       is GameEventPayload.DonDetachedPayload -> applyDonDetached(state, payload)
-      is GameEventPayload.DonReturnedPayload -> state
+      is GameEventPayload.DonReturnedPayload -> {
+        val player = state.players[payload.playerId] ?: return state
+        var updated = player
+        for (donId in payload.donCardIds) {
+          if (donId !in updated.cost.cards) {
+            updated = addCardToZone(updated, ZoneType.COST, donId, null)
+          }
+        }
+        state.copy(players = state.players + (payload.playerId to updated))
+      }
 
       is GameEventPayload.AttackDeclaredPayload -> state.copy(
         battle = BattleState(

@@ -736,8 +736,8 @@ internal class ContinuousEffectProcessor(
     var power = (basePower ?: 0) + powerDelta
     val cost = (baseCost ?: 0) + costDelta
 
-    val controller = effectiveController(state, cardId) ?: instance.controllerId
-    if (state.turn?.playerId == controller && definition.category in setOf(
+    effectiveController(state, cardId) ?: instance.controllerId
+    if (definition.category in setOf(
         CardCategory.LEADER, CardCategory.CHARACTER
       )
     ) {
@@ -751,7 +751,7 @@ internal class ContinuousEffectProcessor(
       types = types,
       attributes = attributes,
       cost = if (definition.baseCost != null || costDelta != 0) cost else definition.baseCost,
-      power = if (definition.basePower != null || powerDelta != 0 || (state.turn?.playerId == controller)) power else definition.basePower,
+      power = if (definition.basePower != null || powerDelta != 0 || state.donAttachments.any { it.hostCardId == cardId }) power else definition.basePower,
       life = life,
       counter = counter,
       keywords = keywords,

@@ -430,6 +430,20 @@ internal class DonInstructionExecutor {
       else -> emptyList()
     }
     if (donIds.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+
+    state.cards[instruction.cardId] ?: return fail("UNKNOWN_TARGET", "Target card not found")
+    val player = state.players[context.controllerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    val inField = instruction.cardId in player.leader.cards || instruction.cardId in player.characters.cards
+    if (!inField) {
+      return fail("INVALID_TARGET_ZONE", "Target must be Leader or Character")
+    }
+
+    for (donId in donIds) {
+      if (donId !in player.cost.cards) {
+        return fail("DON_NOT_IN_COST", "DON must be in Cost area")
+      }
+    }
+
     val seq = state.lastEventSequence + 1
     val event = GameEvent(
       id = EventId("${state.id.value}:$seq"),
