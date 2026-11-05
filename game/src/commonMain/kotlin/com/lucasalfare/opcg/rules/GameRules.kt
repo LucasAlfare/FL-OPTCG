@@ -237,7 +237,9 @@ internal class DeckValidator(
     return issues.map { issue ->
       DeckViolation(
         code = "INVALID_PROGRAM_${issue.code}",
-        message = "Card ${def.number} program invalid at ${if (issue.path.isEmpty()) "root" else issue.path.joinToString(".")}: ${issue.message}",
+        message = "Card ${def.number} program invalid at ${
+          if (issue.path.isEmpty()) "root" else issue.path.joinToString(".")
+        }: ${issue.message}",
         cardNumber = def.number,
         expected = null,
         actual = null,
@@ -593,10 +595,9 @@ internal class BattleResolver(
       violations += RuleViolation("FIRST_TURN", "First player cannot attack on the first turn")
     }
 
-    val attacker = state.cards[command.attackerId]
-    if (attacker == null) {
-      return ValidationResult(false, violations + RuleViolation("UNKNOWN_ATTACKER", "Attacker not found"))
-    }
+    val attacker = state.cards[command.attackerId] ?: return ValidationResult(
+      false, violations + RuleViolation("UNKNOWN_ATTACKER", "Attacker not found")
+    )
     val attackerController = continuous.effectiveController(state, command.attackerId) ?: attacker.controllerId
     if (attackerController != command.playerId) {
       violations += RuleViolation("NOT_CONTROLLER", "Attacker is not controlled by the player")
@@ -612,8 +613,11 @@ internal class BattleResolver(
       violations += RuleViolation("INVALID_ATTACKER_ZONE", "Attacker must be Leader or Character")
     }
 
+    var targetIsOpponentLeader = false
+
     when (val target = command.targetId) {
       is BattleTarget.PlayerTarget -> {
+        targetIsOpponentLeader = true
         violations += RuleViolation("INVALID_TARGET", "Direct player target is not used; target Leader or Character")
       }
 
@@ -629,6 +633,7 @@ internal class BattleResolver(
           val opponent = state.players[targetController]
           val isOppLeader = opponent != null && target.cardInstanceId in opponent.leader.cards
           val isOppCharacter = opponent != null && target.cardInstanceId in opponent.characters.cards
+          targetIsOpponentLeader = isOppLeader
           if (!isOppLeader && !isOppCharacter) {
             violations += RuleViolation("INVALID_TARGET_ZONE", "Target must be opponent Leader or Character")
           }
@@ -636,6 +641,26 @@ internal class BattleResolver(
             violations += RuleViolation("TARGET_NOT_RESTED", "Character targets must be rested")
           }
         }
+      }
+    }
+
+    if (inCharacter && turn != null && attacker.enteredPlayTurn == turn.number) {
+      val keywords = continuous.effectiveCharacteristics(state, command.attackerId)?.keywords.orEmpty()
+      val hasRush = KeywordEffect.RUSH in keywords
+      val hasRushCharacter = KeywordEffect.RUSH_CHARACTER in keywords
+      when {
+        hasRush -> Unit
+        hasRushCharacter -> if (targetIsOpponentLeader) {
+          violations += RuleViolation(
+            "RUSH_CHARACTER_NO_LEADER",
+            "Character with Rush: Character cannot attack the opponent's Leader on the turn it entered the field",
+          )
+        }
+
+        else -> violations += RuleViolation(
+          "RUSH_REQUIRED",
+          "Character cannot attack on the turn it entered the field without Rush",
+        )
       }
     }
 
