@@ -387,7 +387,17 @@ internal class DamageProcessor(
         )
       } else {
         seq += 1
-        val movedEvent = GameEvent(
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_REVEALED,
+          sourceCardId = lifeCardId,
+          payload = GameEventPayload.CardRevealedPayload(listOf(lifeCardId), CardVisibility.PUBLIC),
+          visibility = EventVisibility.PUBLIC,
+        )
+
+        seq += 1
+        events += GameEvent(
           id = EventId("${state.id.value}:$seq"),
           sequence = seq,
           type = GameEventType.CARD_MOVED,
@@ -397,16 +407,16 @@ internal class DamageProcessor(
             fromPlayerId = targetPlayerId,
             fromZone = ZoneType.LIFE,
             toPlayerId = targetPlayerId,
-            toZone = ZoneType.HAND,
+            toZone = ZoneType.TRASH,
             destinationIndex = null,
             newObjectId = null,
             orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_DOWN,
-            visibility = CardVisibility.OWNER_ONLY,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
           ),
           visibility = EventVisibility.PUBLIC,
         )
-        events += movedEvent
+
         seq += 1
         events += GameEvent(
           id = EventId("${state.id.value}:$seq"),
@@ -414,26 +424,49 @@ internal class DamageProcessor(
           type = GameEventType.LIFE_CHANGED,
           sourceCardId = null,
           payload = GameEventPayload.LifeChangedPayload(
-            targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.HAND
+            targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.TRASH
           ),
           visibility = EventVisibility.PUBLIC,
         )
 
+        var handled = false
         if (enableTrigger) {
-          val triggerSeq = seq + 1
-          val triggerResult = buildTriggerRequest(
+          val built = buildTriggerProgram(
             state = state,
             lifeCardId = lifeCardId,
             controllerId = targetPlayerId,
-            triggerEvent = movedEvent,
-            seq = triggerSeq,
+            startSeq = seq + 1,
             consumedKeys = consumedTriggerKeys,
           )
-          if (triggerResult != null) {
-            seq = triggerSeq
-            events += triggerResult.first
-            programs += triggerResult.second
+          if (built != null) {
+            events += built.events
+            programs += built.request
+            seq = built.lastSeq
+            handled = true
           }
+        }
+
+        if (!handled) {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.CARD_MOVED,
+            sourceCardId = lifeCardId,
+            payload = GameEventPayload.CardMovedPayload(
+              cardId = lifeCardId,
+              fromPlayerId = targetPlayerId,
+              fromZone = ZoneType.TRASH,
+              toPlayerId = targetPlayerId,
+              toZone = ZoneType.HAND,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_DOWN,
+              visibility = CardVisibility.OWNER_ONLY,
+            ),
+            visibility = EventVisibility.PRIVATE_TO_PLAYER(targetPlayerId),
+          )
         }
       }
     }
@@ -441,20 +474,23 @@ internal class DamageProcessor(
     return LifeDamageResult(events, programs, seq)
   }
 
-  private fun buildTriggerRequest(
+  private fun buildTriggerProgram(
     state: GameState,
     lifeCardId: CardInstanceId,
     controllerId: PlayerId,
-    triggerEvent: GameEvent,
-    seq: Long,
+    startSeq: Long,
     consumedKeys: MutableSet<AbilityUsageKey>,
-  ): Pair<GameEvent, ProgramRequest>? {
+  ): TriggerProgramBuild? {
     val card = state.cards[lifeCardId] ?: return null
     val def = cardCatalog.get(card.definitionId) ?: return null
     val triggerAbility = def.abilities.filterIsInstance<ActivatedAbilityDefinition>()
       .firstOrNull { it.timing == ActivationTiming.ON_TRIGGER } ?: return null
+
+    // Trigger não paga custo. Se a habilidade exigir custo, a carta não é
+    // ativável como trigger opcional — tratamos como "sem trigger".
     if (triggerAbility.cost !is Cost.NoCost) return null
 
+    // Respeita usage limit (raro em triggers, mas o modelo permite).
     if (triggerAbility.usageLimit == UsageLimit.ONCE_PER_TURN) {
       val key = AbilityUsageKey(card.objectId, triggerAbility.id, state.turn?.number ?: 0)
       if (key in consumedKeys) return null
@@ -462,13 +498,49 @@ internal class DamageProcessor(
       consumedKeys.add(key)
     }
 
+    val triggerCardVar = VariableId("${state.id.value}:trigger:${lifeCardId.value}:card")
+    val decisionVar = VariableId("${state.id.value}:trigger:${lifeCardId.value}:decision")
+
+    // Programa de Trigger:
+    //   1. ChooseNumber(0..1) — "Ativar Trigger?" (1 = Sim, 0 = Não)
+    //   2. Conditional:
+    //      - ifTrue  → executa o efeito do Trigger (a carta já está no Trash,
+    //                   e permanece lá ao final, salvo se o efeito mover).
+    //      - ifFalse → move a carta do Trash para a mão do controlador.
+    val program = Program(
+      id = ProgramId("trigger:${lifeCardId.value}:$startSeq"),
+      instructions = listOf(
+        ChooseNumber(
+          playerId = controllerId,
+          minimum = ValueExpr.NumberValue(0),
+          maximum = ValueExpr.NumberValue(1),
+          destination = decisionVar,
+        ),
+        Conditional(
+          condition = Condition.Comparison(
+            left = ValueExpr.VariableValue(decisionVar),
+            operator = ComparisonOperator.EQUAL,
+            right = ValueExpr.NumberValue(1),
+          ),
+          ifTrue = triggerAbility.program.instructions,
+          ifFalse = listOf(
+            MoveCards(
+              source = triggerCardVar,
+              destination = ZoneDestination(controllerId, ZoneType.HAND),
+              placement = Placement.DEFAULT,
+            )
+          ),
+        ),
+      ),
+    )
+
     val activationEvent = GameEvent(
-      id = EventId("${state.id.value}:$seq"),
-      sequence = seq,
+      id = EventId("${state.id.value}:$startSeq"),
+      sequence = startSeq,
       type = GameEventType.EFFECT_ACTIVATED,
       sourceCardId = lifeCardId,
       payload = GameEventPayload.EffectActivatedPayload(
-        effectId = EffectId("${state.id.value}:trigger:$seq"),
+        effectId = EffectId("${state.id.value}:trigger:$startSeq"),
         sourceCardId = lifeCardId,
         abilityId = triggerAbility.id,
       ),
@@ -477,17 +549,22 @@ internal class DamageProcessor(
 
     val request = ProgramRequest(
       executionId = ExecutionId(activationEvent.id.value),
-      program = triggerAbility.program,
+      program = program,
       context = EffectContext(
         gameId = state.id,
         controllerId = controllerId,
         sourceCardId = lifeCardId,
         abilityId = triggerAbility.id,
-        triggeringEvent = triggerEvent,
+        triggeringEvent = null,
       ),
+      initialVariables = mapOf(triggerCardVar to StoredValue.CardValue(lifeCardId)),
     )
 
-    return activationEvent to request
+    return TriggerProgramBuild(
+      events = listOf(activationEvent),
+      request = request,
+      lastSeq = startSeq,
+    )
   }
 
   private fun evaluateDamagePrevention(
@@ -547,6 +624,12 @@ internal class DamageProcessor(
   private data class LifeDamageResult(
     val events: List<GameEvent>,
     val programs: List<ProgramRequest>,
+    val lastSeq: Long,
+  )
+
+  private data class TriggerProgramBuild(
+    val events: List<GameEvent>,
+    val request: ProgramRequest,
     val lastSeq: Long,
   )
 }

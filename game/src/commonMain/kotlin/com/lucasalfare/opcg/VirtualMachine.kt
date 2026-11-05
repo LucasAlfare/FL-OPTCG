@@ -200,13 +200,14 @@ class VirtualMachine(
     state: GameState,
     executionId: ExecutionId,
     followUps: List<ProgramRequest> = emptyList(),
+    initialVariables: Map<VariableId, StoredValue> = emptyMap(),
   ): VmTransition {
     val frame = ProgramFrame(
       id = executionId,
       program = program,
       context = context,
       instructionPointer = 0,
-      variables = emptyMap(),
+      variables = initialVariables,
       callStack = emptyList(),
       status = ProgramStatus.RUNNING,
       pendingChoiceId = null,

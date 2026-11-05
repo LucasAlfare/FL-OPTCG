@@ -19,6 +19,7 @@ data class ProgramRequest(
   val executionId: ExecutionId,
   val program: Program,
   val context: EffectContext,
+  val initialVariables: Map<VariableId, StoredValue> = emptyMap(),
 )
 
 data class GameTransition(

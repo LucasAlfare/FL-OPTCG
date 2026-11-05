@@ -872,7 +872,7 @@ class GameEngine private constructor(
     followUps: List<ProgramRequest> = emptyList(),
   ): CommandResult? {
     val vmTransition = virtualMachine.start(
-      request.program, request.context, state, request.executionId, followUps,
+      request.program, request.context, state, request.executionId, followUps, request.initialVariables
     )
     return applyVmTransition(vmTransition, accumulated)
   }
