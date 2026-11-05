@@ -9,8 +9,8 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val battleResolver = BattleResolver(cardCatalog)
   private val damageProcessor = DamageProcessor(cardCatalog)
   private val costProcessor = CostProcessor()
-  private val effectScheduler = EffectScheduler(cardCatalog)
   private val continuousEffectProcessor = ContinuousEffectProcessor(cardCatalog, this)
+  private val effectScheduler = EffectScheduler(cardCatalog, continuousEffectProcessor, this)
   private val replacementProcessor = ReplacementProcessor()
   private val ruleProcessor = RuleProcessor()
   private val informationManager = InformationManager()
@@ -19,10 +19,6 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val gameFactory = GameFactory(cardCatalog)
   private val zoneInstructionExecutor = ZoneInstructionExecutor()
   private val donInstructionExecutor = DonInstructionExecutor()
-
-  init {
-    effectScheduler.bindEvaluator(this)
-  }
 
   fun validate(state: GameState, command: GameCommand): ValidationResult {
     if (state.status == GameStatus.FINISHED) {
@@ -34,7 +30,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         listOf(RuleViolation("BATTLE_IN_PROGRESS", "Main phase actions are not allowed during a battle")),
       )
     }
-    return when (command) {
+    val base = when (command) {
       is PlayCardCommand -> mainPhaseController.validatePlayCard(
         state, command, cardCatalog, continuousEffectProcessor, costProcessor
       )
@@ -57,6 +53,47 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is ResolveMulliganCommand -> validateMulligan(state, command)
       is ConcedeCommand -> validateConcede(state, command)
     }
+    return applyRuleModifiers(state, command, base)
+  }
+
+  private fun actionOf(command: GameCommand): Pair<RuleAction, CardInstanceId?>? = when (command) {
+    is PlayCardCommand -> RuleAction.PLAY_CARD to command.cardId
+    is ActivateAbilityCommand -> RuleAction.ACTIVATE_ABILITY to command.sourceCardId
+    is DeclareAttackCommand -> RuleAction.DECLARE_ATTACK to command.attackerId
+    is ActivateBlockerCommand -> RuleAction.ACTIVATE_BLOCKER to command.blockerId
+    is UseCharacterCounterCommand -> RuleAction.USE_COUNTER to command.cardId
+    is UseEventCounterCommand -> RuleAction.USE_COUNTER to command.cardId
+    is GiveDonCommand -> RuleAction.ATTACH_DON to null
+    else -> null
+  }
+
+  private fun applyRuleModifiers(
+    state: GameState,
+    command: GameCommand,
+    base: ValidationResult,
+  ): ValidationResult {
+    val (action, subject) = actionOf(command) ?: return base
+
+    val restrictions = continuousEffectProcessor.isActionRestricted(state, action, subject)
+    if (restrictions.isNotEmpty()) {
+      return ValidationResult(false, base.violations + restrictions)
+    }
+
+    if (!base.valid && continuousEffectProcessor.hasPermissionFor(state, action, subject)) {
+      val overridable = setOf(
+        "NOT_MAIN_PHASE",
+        "FIRST_TURN",
+        "NOT_COUNTER_STEP",
+        "NOT_BLOCK_STEP",
+        "ILLEGAL_TIMING",
+        "TIMING_MISMATCH",
+        "ILLEGAL_ZONE",
+      )
+      val remaining = base.violations.filterNot { it.code in overridable }
+      return ValidationResult(remaining.isEmpty(), remaining)
+    }
+
+    return base
   }
 
   private fun isMainPhaseCommand(command: GameCommand): Boolean = when (command) {
@@ -126,6 +163,8 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     turnController.startTurn(state, playerId, turnNumber, continuousEffectProcessor, this)
 
   fun createInitialState(setup: GameSetup): GameCreationResult = gameFactory.create(setup)
+
+  fun deckRuleModifiers(state: GameState): List<DeckRuleModifier> = continuousEffectProcessor.activeDeckModifiers(state)
 
   fun effectiveCharacteristics(state: GameState, cardId: CardInstanceId): EffectiveCharacteristics? =
     continuousEffectProcessor.effectiveCharacteristics(state, cardId)

@@ -31,7 +31,14 @@ internal class DeckValidator(
   private val cardCatalog: CardCatalog,
 ) {
 
-  fun validate(deck: DeckList, format: GameFormat): DeckValidationResult {
+  fun validate(deck: DeckList, format: GameFormat): DeckValidationResult = validate(deck, format, emptyList())
+
+  fun validate(
+    deck: DeckList,
+    format: GameFormat,
+    modifiers: List<DeckRuleModifier>,
+  ): DeckValidationResult {
+    val effectiveFormat = applyModifiers(format, modifiers)
     val violations = mutableListOf<DeckViolation>()
 
     val leaderDef = cardCatalog.get(deck.leader)
@@ -53,7 +60,7 @@ internal class DeckValidator(
           actual = null,
         )
       }
-      if (format.bannedCardNumbers.contains(leaderDef.number)) {
+      if (effectiveFormat.bannedCardNumbers.contains(leaderDef.number)) {
         violations += DeckViolation(
           code = "BANNED_CARD",
           message = "Leader card is banned",
@@ -65,23 +72,23 @@ internal class DeckValidator(
     }
 
     val mainSize = deck.cards.size
-    if (mainSize != format.mainDeckSize) {
+    if (mainSize != effectiveFormat.mainDeckSize) {
       violations += DeckViolation(
         code = "MAIN_DECK_SIZE",
-        message = "Main deck must contain exactly ${format.mainDeckSize} cards",
+        message = "Main deck must contain exactly ${effectiveFormat.mainDeckSize} cards",
         cardNumber = null,
-        expected = format.mainDeckSize,
+        expected = effectiveFormat.mainDeckSize,
         actual = mainSize,
       )
     }
 
     val donSize = deck.donDeck.size
-    if (donSize != format.donDeckSize) {
+    if (donSize != effectiveFormat.donDeckSize) {
       violations += DeckViolation(
         code = "DON_DECK_SIZE",
-        message = "DON!! deck must contain exactly ${format.donDeckSize} cards",
+        message = "DON!! deck must contain exactly ${effectiveFormat.donDeckSize} cards",
         cardNumber = null,
-        expected = format.donDeckSize,
+        expected = effectiveFormat.donDeckSize,
         actual = donSize,
       )
     }
@@ -113,7 +120,7 @@ internal class DeckValidator(
       }
       mainColors += def.colors
       mainNumberCounts[def.number] = (mainNumberCounts[def.number] ?: 0) + 1
-      if (format.bannedCardNumbers.contains(def.number)) {
+      if (effectiveFormat.bannedCardNumbers.contains(def.number)) {
         violations += DeckViolation(
           code = "BANNED_CARD",
           message = "Card is banned",
@@ -125,8 +132,8 @@ internal class DeckValidator(
     }
 
     for ((number, count) in mainNumberCounts) {
-      val restrictedLimit = format.restrictedCardNumbers[number]
-      val maxAllowed = restrictedLimit ?: format.maximumCopies
+      val restrictedLimit = effectiveFormat.restrictedCardNumbers[number]
+      val maxAllowed = restrictedLimit ?: effectiveFormat.maximumCopies
       if (count > maxAllowed) {
         violations += DeckViolation(
           code = if (restrictedLimit != null) "RESTRICTED_COPIES" else "MAXIMUM_COPIES",
@@ -138,7 +145,7 @@ internal class DeckValidator(
       }
     }
 
-    if (format.enforceLeaderColors && leaderDef != null) {
+    if (effectiveFormat.enforceLeaderColors && leaderDef != null) {
       val excess = mainColors - leaderDef.colors
       if (excess.isNotEmpty()) {
         violations += DeckViolation(
@@ -174,7 +181,7 @@ internal class DeckValidator(
         )
       }
       donNumberCounts[def.number] = (donNumberCounts[def.number] ?: 0) + 1
-      if (format.bannedCardNumbers.contains(def.number)) {
+      if (effectiveFormat.bannedCardNumbers.contains(def.number)) {
         violations += DeckViolation(
           code = "BANNED_CARD",
           message = "DON!! card is banned",
@@ -186,8 +193,8 @@ internal class DeckValidator(
     }
 
     for ((number, count) in donNumberCounts) {
-      val restrictedLimit = format.restrictedCardNumbers[number]
-      val maxAllowed = restrictedLimit ?: format.maximumCopies
+      val restrictedLimit = effectiveFormat.restrictedCardNumbers[number]
+      val maxAllowed = restrictedLimit ?: effectiveFormat.maximumCopies
       if (count > maxAllowed) {
         violations += DeckViolation(
           code = if (restrictedLimit != null) "RESTRICTED_COPIES" else "MAXIMUM_COPIES",
@@ -201,6 +208,53 @@ internal class DeckValidator(
 
     return DeckValidationResult(valid = violations.isEmpty(), violations = violations)
   }
+
+  private fun applyModifiers(format: GameFormat, modifiers: List<DeckRuleModifier>): GameFormat {
+    if (modifiers.isEmpty()) return format
+    var current = format
+    val restricted = current.restrictedCardNumbers.toMutableMap()
+    for (modifier in modifiers) {
+      current = when (modifier.property) {
+        DeckRuleProperty.MAIN_DECK_SIZE -> {
+          val value = applyNumeric(modifier, current.mainDeckSize)
+          current.copy(mainDeckSize = value)
+        }
+
+        DeckRuleProperty.DON_DECK_SIZE -> {
+          val value = applyNumeric(modifier, current.donDeckSize)
+          current.copy(donDeckSize = value)
+        }
+
+        DeckRuleProperty.MAXIMUM_COPIES -> {
+          val value = applyNumeric(modifier, current.maximumCopies)
+          val targetCard = modifier.cardNumber
+          if (targetCard != null) {
+            restricted[targetCard] = value
+            current.copy(restrictedCardNumbers = restricted.toMap())
+          } else {
+            current.copy(maximumCopies = value)
+          }
+        }
+
+        DeckRuleProperty.ALLOWED_COLORS -> {
+          if (modifier.allowedColors != null) {
+            current.copy(enforceLeaderColors = false)
+          } else current
+        }
+      }
+    }
+    return current
+  }
+
+  private fun applyNumeric(modifier: DeckRuleModifier, base: Int): Int {
+    val operation = modifier.numericOperation ?: return base
+    val value = (modifier.numericValue as? ValueExpr.NumberValue)?.value ?: return base
+    return when (operation) {
+      NumericOperation.ADD -> base + value
+      NumericOperation.SUBTRACT -> base - value
+      NumericOperation.SET -> value
+    }
+  }
 }
 
 internal class GameFactory(
@@ -209,7 +263,9 @@ internal class GameFactory(
 
   private val deckValidator = DeckValidator(cardCatalog)
 
-  fun create(setup: GameSetup): GameCreationResult {
+  fun create(setup: GameSetup): GameCreationResult = create(setup, emptyList())
+
+  fun create(setup: GameSetup, deckModifiers: List<DeckRuleModifier>): GameCreationResult {
     require(setup.players.size == 2) { "Exactly two players are required" }
     val playerIds = setup.players.map { it.playerId }
     require(playerIds.distinct().size == 2) { "Players must be distinct" }
@@ -217,7 +273,7 @@ internal class GameFactory(
     require(setup.chooserPlayerId in playerIds) { "chooserPlayerId must belong to a player" }
 
     for (playerDeck in setup.players) {
-      val result = deckValidator.validate(playerDeck.deckList, setup.format)
+      val result = deckValidator.validate(playerDeck.deckList, setup.format, deckModifiers)
       if (!result.valid) {
         val detail = result.violations.joinToString("; ") { it.message }
         throw IllegalArgumentException("Invalid deck for ${playerDeck.playerId.value}: $detail")
@@ -486,6 +542,10 @@ internal class BattleResolver(
     continuous: ContinuousEffectProcessor,
   ): ValidationResult {
     val violations = mutableListOf<RuleViolation>()
+    val restrictions = continuous.isActionRestricted(state, RuleAction.DECLARE_ATTACK, command.attackerId)
+    if (restrictions.isNotEmpty()) {
+      return ValidationResult(false, restrictions)
+    }
     val turn = state.turn
     if (turn == null || turn.phase != GamePhase.MAIN || turn.playerId != command.playerId) {
       violations += RuleViolation("NOT_MAIN_PHASE", "Attack only during your Main Phase")
@@ -642,6 +702,10 @@ internal class BattleResolver(
     command: ActivateBlockerCommand,
     continuous: ContinuousEffectProcessor,
   ): ValidationResult {
+    val restrictions = continuous.isActionRestricted(state, RuleAction.ACTIVATE_BLOCKER, command.blockerId)
+    if (restrictions.isNotEmpty()) {
+      return ValidationResult(false, restrictions)
+    }
     val violations = mutableListOf<RuleViolation>()
     val battle = state.battle
     if (battle == null || battle.step != BattleStep.BLOCK) {
@@ -733,6 +797,10 @@ internal class BattleResolver(
     command: UseCharacterCounterCommand,
     continuous: ContinuousEffectProcessor,
   ): ValidationResult {
+    val restrictions = continuous.isActionRestricted(state, RuleAction.USE_COUNTER, command.cardId)
+    if (restrictions.isNotEmpty()) {
+      return ValidationResult(false, restrictions)
+    }
     val violations = mutableListOf<RuleViolation>()
     val battle = state.battle
     if (battle == null || battle.step != BattleStep.COUNTER) {
@@ -828,6 +896,10 @@ internal class BattleResolver(
     continuous: ContinuousEffectProcessor,
     evaluator: RulesEngine,
   ): ValidationResult {
+    val restrictions = continuous.isActionRestricted(state, RuleAction.USE_COUNTER, command.cardId)
+    if (restrictions.isNotEmpty()) {
+      return ValidationResult(false, restrictions)
+    }
     val violations = mutableListOf<RuleViolation>()
     val battle = state.battle
     if (battle == null || battle.step != BattleStep.COUNTER) {
@@ -1065,6 +1137,8 @@ internal class BattleResolver(
 
 internal class EffectScheduler(
   private val cardCatalog: CardCatalog,
+  private val continuous: ContinuousEffectProcessor,
+  private val evaluator: RulesEngine,
 ) {
   private val costResolver = CostResolver()
 
@@ -1218,6 +1292,7 @@ internal class EffectScheduler(
       val abilities =
         definition.abilities.filterIsInstance<AutoAbilityDefinition>() + grantedAutoAbilities(state, cardId)
       for (ability in abilities) {
+        if (continuous.isAbilityNegated(state, cardId, ability.id)) continue
         if (!matchesPattern(ability.trigger, event, state, cardId, controller, evaluator)) continue
         if (ability.condition != null) {
           val ctx = EffectContext(
@@ -1306,7 +1381,7 @@ internal class EffectScheduler(
 
   private fun grantedAutoAbilities(state: GameState, cardId: CardInstanceId): List<AutoAbilityDefinition> {
     return state.activeEffects.mapNotNull { effect ->
-      if (!isActive(state, effect)) return@mapNotNull null
+      if (!continuous.isEffectActive(state, effect)) return@mapNotNull null
       if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
       val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
       if (!modifier.add) return@mapNotNull null
@@ -1316,7 +1391,7 @@ internal class EffectScheduler(
 
   private fun grantedActivatedAbilities(state: GameState, cardId: CardInstanceId): List<ActivatedAbilityDefinition> {
     return state.activeEffects.mapNotNull { effect ->
-      if (!isActive(state, effect)) return@mapNotNull null
+      if (!continuous.isEffectActive(state, effect)) return@mapNotNull null
       if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
       val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
       if (!modifier.add) return@mapNotNull null
@@ -1324,51 +1399,35 @@ internal class EffectScheduler(
     }
   }
 
-  private fun isActive(state: GameState, effect: ActiveEffect): Boolean {
-    return when (val duration = effect.duration) {
-      is Duration.Permanent -> true
-      is Duration.DuringBattle -> state.battle != null
-      is Duration.WhileSourceValid -> sourceZoneMatches(state, effect.sourceCardId)
-      is Duration.WhileCondition -> conditionHolds(state, effect, duration.condition)
-      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent -> true
+  private fun extraCostsFor(
+    state: GameState,
+    sourceCardId: CardInstanceId,
+    ability: ActivatedAbilityDefinition,
+    evaluator: RulesEngine,
+  ): List<Cost> {
+    val results = mutableListOf<Cost>()
+    val controller = evaluator.effectiveController(state, sourceCardId)
+    for (effect in state.activeEffects) {
+      if (!continuous.isEffectActive(state, effect)) continue
+      val modifier = effect.modifier as? Modifier.ActivationCostModifier ?: continue
+      val selector = modifier.selector
+      if (selector.abilityId != null && selector.abilityId != ability.id) continue
+      if (selector.timing != null && selector.timing != ability.timing) continue
+      if (selector.abilityType != null && selector.abilityType != AbilityType.ACTIVATED) continue
+      if (selector.cardSelector != null) {
+        val ctx = EffectContext(
+          gameId = state.id,
+          controllerId = controller ?: effect.controllerId,
+          sourceCardId = sourceCardId,
+          abilityId = ability.id,
+          triggeringEvent = null,
+        )
+        val matched = evaluator.selectCardIds(selector.cardSelector, state, ctx) ?: continue
+        if (sourceCardId !in matched) continue
+      }
+      results += modifier.cost
     }
-  }
-
-  private fun sourceZoneMatches(state: GameState, sourceCardId: CardInstanceId?): Boolean {
-    if (sourceCardId == null) return false
-    val instance = state.cards[sourceCardId] ?: return false
-    val definition = cardCatalog.get(instance.definitionId) ?: return true
-    val zone = zoneOf(state, sourceCardId) ?: return false
-    return when (definition.category) {
-      CardCategory.LEADER -> zone == ZoneType.LEADER
-      CardCategory.CHARACTER -> zone == ZoneType.CHARACTER
-      CardCategory.STAGE -> zone == ZoneType.STAGE
-      CardCategory.EVENT -> zone == ZoneType.TRASH || zone == ZoneType.HAND
-      CardCategory.DON -> zone == ZoneType.COST || zone == ZoneType.DON_DECK || zone == ZoneType.ATTACHED_DON
-    }
-  }
-
-  private fun conditionHolds(state: GameState, effect: ActiveEffect, condition: Condition): Boolean {
-    val ctx = EffectContext(
-      gameId = state.id,
-      controllerId = effect.controllerId,
-      sourceCardId = effect.sourceCardId,
-      abilityId = effect.sourceAbilityId,
-      triggeringEvent = null,
-    )
-    return when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
-      is EvaluationResult.Failed -> false
-      is EvaluationResult.Success -> result.value
-    }
-  }
-
-  private val evaluator: RulesEngine
-    get() = currentEvaluator ?: error("EffectScheduler evaluator not initialized")
-
-  private var currentEvaluator: RulesEngine? = null
-
-  fun bindEvaluator(evaluator: RulesEngine) {
-    currentEvaluator = evaluator
+    return results
   }
 
   private fun orderScheduled(state: GameState, items: List<ScheduledAuto>): List<ScheduledAuto> {
@@ -1572,6 +1631,12 @@ internal class EffectScheduler(
     if (card == null) {
       return AbilityResolveResult.Invalid(listOf(RuleViolation("UNKNOWN_CARD", "Source card not found")))
     }
+    if (continuous.isAbilityNegated(state, sourceCardId, abilityId)) {
+      return AbilityResolveResult.Invalid(
+        listOf(RuleViolation("NEGATED_ABILITY", "Ability is negated by a continuous effect"))
+      )
+    }
+    violations += continuous.isActionRestricted(state, RuleAction.ACTIVATE_ABILITY, sourceCardId)
     val controller = evaluator.effectiveController(state, sourceCardId) ?: card.controllerId
     if (controller != playerId) {
       violations += RuleViolation("NOT_CONTROLLER", "Player does not control the source card")
@@ -1616,7 +1681,9 @@ internal class EffectScheduler(
         violations += RuleViolation("USAGE_LIMIT", "Ability already used this turn")
       }
     }
-    val costPayment = costResolver.preview(state, playerId, ability.cost, sourceCardId, evaluator)
+    val extraCosts = extraCostsFor(state, sourceCardId, ability, evaluator)
+    val combinedCost = if (extraCosts.isEmpty()) ability.cost else Cost.CombinedCost(listOf(ability.cost) + extraCosts)
+    val costPayment = costResolver.preview(state, playerId, combinedCost, sourceCardId, evaluator)
     if (costPayment == null) violations += RuleViolation("COST_UNPAID", "Unable to pay ability cost")
     if (violations.isNotEmpty() || costPayment == null) return AbilityResolveResult.Invalid(violations)
     return AbilityResolveResult.Ok(sourceCardId, ability, playerId, card.objectId, costPayment)
@@ -1647,6 +1714,8 @@ internal class EffectScheduler(
         if (timing != null && ability.timing != timing) continue
         if (selector.timing != null && ability.timing != selector.timing) continue
         if (!isZoneLegalForActivatedAbility(state, cardId, ability)) continue
+        if (continuous.isAbilityNegated(state, cardId, ability.id)) continue
+        if (continuous.isActionRestricted(state, RuleAction.ACTIVATE_ABILITY, cardId).isNotEmpty()) continue
         results += cardId to ability
       }
     }

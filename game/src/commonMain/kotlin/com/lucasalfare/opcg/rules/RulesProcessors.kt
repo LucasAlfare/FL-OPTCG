@@ -562,12 +562,8 @@ internal class LoopProcessor {
     val normalized = state.copy(
       lastEventSequence = 0,
       abilityUsage = emptyMap(),
-      activeEffects = state.activeEffects
-        .map { it.copy(timestampSequence = 0) }
-        .sortedBy { it.id.value },
-      activePrograms = state.activePrograms
-        .map { it.copy(stepCount = 0) }
-        .sortedBy { it.id.value },
+      activeEffects = state.activeEffects.map { it.copy(timestampSequence = 0) }.sortedBy { it.id.value },
+      activePrograms = state.activePrograms.map { it.copy(stepCount = 0) }.sortedBy { it.id.value },
       randomState = state.randomState.copy(drawCount = 0),
     )
     return GameSerialization.encodeState(normalized)
@@ -756,9 +752,7 @@ internal class ContinuousEffectProcessor(
     for (effect in state.activeEffects) {
       when (val duration = effect.duration) {
         is Duration.UntilEndOfTurn -> {
-          if (triggeringEvents.any { it.type == GameEventType.TURN_ENDED } || turnIdentityChanged(state)) {
-            expired += effect
-          }
+          if (triggeringEvents.any { it.type == GameEventType.TURN_ENDED }) expired += effect
         }
 
         is Duration.UntilEndOfPhase -> {
@@ -787,7 +781,106 @@ internal class ContinuousEffectProcessor(
     return expired
   }
 
-  private fun turnIdentityChanged(state: GameState): Boolean = false
+  fun isAbilityNegated(
+    state: GameState,
+    sourceCardId: CardInstanceId?,
+    abilityId: AbilityId?,
+  ): Boolean {
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.EffectNegationModifier ?: continue
+      if (!isEffectActive(state, effect)) continue
+      when (val scope = modifier.scope) {
+        is EffectScope.All -> return true
+        is EffectScope.Ability -> if (abilityId != null && scope.abilityId == abilityId) return true
+        is EffectScope.Card -> if (sourceCardId != null && scope.cardInstanceId == sourceCardId) return true
+        is EffectScope.CurrentBattle -> if (state.battle != null) return true
+      }
+    }
+    return false
+  }
+
+  fun isActionRestricted(
+    state: GameState,
+    action: RuleAction,
+    subjectCardId: CardInstanceId?,
+  ): List<RuleViolation> {
+    val violations = mutableListOf<RuleViolation>()
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.RestrictionModifier ?: continue
+      if (!isEffectActive(state, effect)) continue
+      val restriction = modifier.restriction
+      if (restriction.action != action) continue
+      if (!subjectMatches(state, effect, restriction.subject, subjectCardId)) continue
+      if (!conditionHolds(state, effect, restriction.condition)) continue
+      violations += RuleViolation("RESTRICTED_ACTION", "Action is restricted by continuous effect")
+    }
+    return violations
+  }
+
+  fun hasPermissionFor(
+    state: GameState,
+    action: RuleAction,
+    subjectCardId: CardInstanceId?,
+  ): Boolean {
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.PermissionModifier ?: continue
+      if (!isEffectActive(state, effect)) continue
+      val permission = modifier.permission
+      if (permission.action != action) continue
+      if (!subjectMatches(state, effect, permission.subject, subjectCardId)) continue
+      if (!conditionHolds(state, effect, permission.condition)) continue
+      return true
+    }
+    return false
+  }
+
+  fun activeDeckModifiers(state: GameState): List<DeckRuleModifier> {
+    val results = mutableListOf<DeckRuleModifier>()
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.DeckRuleEffectModifier ?: continue
+      if (!isEffectActive(state, effect)) continue
+      results += modifier.modifier
+    }
+    return results
+  }
+
+  private fun subjectMatches(
+    state: GameState,
+    effect: ActiveEffect,
+    selector: CardSelector?,
+    subjectCardId: CardInstanceId?,
+  ): Boolean {
+    if (selector == null) return true
+    if (subjectCardId == null) return false
+    val ctx = EffectContext(
+      gameId = state.id,
+      controllerId = effect.controllerId,
+      sourceCardId = effect.sourceCardId,
+      abilityId = effect.sourceAbilityId,
+      triggeringEvent = null,
+    )
+    val matched = evaluator.selectCardIds(selector, state, ctx) ?: return false
+    return subjectCardId in matched
+  }
+
+  private fun conditionHolds(
+    state: GameState,
+    effect: ActiveEffect,
+    condition: Condition?,
+  ): Boolean {
+    if (condition == null) return true
+    val ctx = EffectContext(
+      gameId = state.id,
+      controllerId = effect.controllerId,
+      sourceCardId = effect.sourceCardId,
+      abilityId = effect.sourceAbilityId,
+      triggeringEvent = null,
+    )
+    return when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
+      is EvaluationResult.Failed -> false
+      is EvaluationResult.Success -> result.value
+    }
+  }
 
   private fun isSourceValid(state: GameState, sourceCardId: CardInstanceId?): Boolean {
     if (sourceCardId == null) return false
@@ -838,8 +931,7 @@ internal class ContinuousEffectProcessor(
   }
 
   private fun matchesPattern(pattern: GameEventPattern, event: GameEvent): Boolean {
-    if (pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes) return false
-    return true
+    return !(pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes)
   }
 
   private fun constantValue(expr: ValueExpr): Int {
