@@ -11,6 +11,7 @@ internal class DamageProcessor(
     battle: BattleState,
     continuous: ContinuousEffectProcessor,
     evaluator: RulesEngine,
+    replacementProcessor: ReplacementProcessor,
   ): GameTransition {
     state.cards[battle.attackerId] ?: return endBattleOnly(state, battle, BattleOutcome.INTERRUPTED)
 
@@ -79,7 +80,7 @@ internal class DamageProcessor(
       if (targetCard != null) {
         val ownerId = targetCard.ownerId
         seq += 1
-        events += GameEvent(
+        val koEvent = GameEvent(
           id = EventId("${state.id.value}:$seq"),
           sequence = seq,
           type = GameEventType.CARD_KNOCKED_OUT,
@@ -87,27 +88,40 @@ internal class DamageProcessor(
           payload = GameEventPayload.CardKnockedOutPayload(targetCardId, ownerId, battle.attackerId, null),
           visibility = EventVisibility.PUBLIC,
         )
+        events += koEvent
 
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARD_MOVED,
-          sourceCardId = targetCardId,
-          payload = GameEventPayload.CardMovedPayload(
-            cardId = targetCardId,
-            fromPlayerId = ownerId,
-            fromZone = ZoneType.CHARACTER,
-            toPlayerId = ownerId,
-            toZone = ZoneType.TRASH,
-            destinationIndex = null,
-            newObjectId = null,
-            orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_UP,
-            visibility = CardVisibility.PUBLIC,
-          ),
-          visibility = EventVisibility.PUBLIC,
-        )
+        val replacement = replacementProcessor.matchingReplacements(state, koEvent, continuous, evaluator).firstOrNull()
+
+        val activation = replacement?.let {
+          replacementProcessor.buildActivation(state, seq + 1, it, koEvent)
+        }
+
+        if (activation != null) {
+          events += activation.events
+          programs += activation.request
+          seq += 2
+        } else {
+          seq += 1
+          events += GameEvent(
+            id = EventId("${state.id.value}:$seq"),
+            sequence = seq,
+            type = GameEventType.CARD_MOVED,
+            sourceCardId = targetCardId,
+            payload = GameEventPayload.CardMovedPayload(
+              cardId = targetCardId,
+              fromPlayerId = ownerId,
+              fromZone = ZoneType.CHARACTER,
+              toPlayerId = ownerId,
+              toZone = ZoneType.TRASH,
+              destinationIndex = null,
+              newObjectId = null,
+              orientation = CardOrientation.NOT_APPLICABLE,
+              faceState = FaceState.FACE_UP,
+              visibility = CardVisibility.PUBLIC,
+            ),
+            visibility = EventVisibility.PUBLIC,
+          )
+        }
       }
     }
 
@@ -125,6 +139,7 @@ internal class DamageProcessor(
     replacementProcessor: ReplacementProcessor,
     continuous: ContinuousEffectProcessor,
     cardCatalog: CardCatalog,
+    evaluator: RulesEngine,
   ): InstructionExecutionResult {
     val cardIds = when (val source = variables[instruction.source]) {
       is StoredValue.CardIdsValue -> source.value
@@ -133,6 +148,7 @@ internal class DamageProcessor(
     }
 
     val events = mutableListOf<GameEvent>()
+    val programs = mutableListOf<ProgramRequest>()
     var seq = state.lastEventSequence
 
     for (cardId in cardIds) {
@@ -140,7 +156,7 @@ internal class DamageProcessor(
       val ownerId = card.ownerId
 
       seq += 1
-      events += GameEvent(
+      val koEvent = GameEvent(
         id = EventId("${state.id.value}:$seq"),
         sequence = seq,
         type = GameEventType.CARD_KNOCKED_OUT,
@@ -148,30 +164,43 @@ internal class DamageProcessor(
         payload = GameEventPayload.CardKnockedOutPayload(cardId, ownerId, context.sourceCardId, instruction.effectId),
         visibility = EventVisibility.PUBLIC,
       )
+      events += koEvent
 
-      seq += 1
-      events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.CARD_MOVED,
-        sourceCardId = cardId,
-        payload = GameEventPayload.CardMovedPayload(
-          cardId = cardId,
-          fromPlayerId = ownerId,
-          fromZone = ZoneType.CHARACTER,
-          toPlayerId = ownerId,
-          toZone = ZoneType.TRASH,
-          destinationIndex = null,
-          newObjectId = null,
-          orientation = CardOrientation.NOT_APPLICABLE,
-          faceState = FaceState.FACE_UP,
-          visibility = CardVisibility.PUBLIC,
-        ),
-        visibility = EventVisibility.PUBLIC,
-      )
+      val replacement = replacementProcessor.matchingReplacements(state, koEvent, continuous, evaluator).firstOrNull()
+
+      val activation = replacement?.let {
+        replacementProcessor.buildActivation(state, seq + 1, it, koEvent)
+      }
+
+      if (activation != null) {
+        events += activation.events
+        programs += activation.request
+        seq += 2
+      } else {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = cardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = cardId,
+            fromPlayerId = ownerId,
+            fromZone = ZoneType.CHARACTER,
+            toPlayerId = ownerId,
+            toZone = ZoneType.TRASH,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
     }
 
-    return InstructionExecutionResult.Completed(null, events)
+    return InstructionExecutionResult.Completed(null, events, programs)
   }
 
   fun executeDealDamage(
@@ -961,10 +990,37 @@ internal class ContinuousEffectProcessor(
 
 internal class ReplacementProcessor {
 
-  fun matchingReplacements(state: GameState, event: GameEvent): List<ActiveEffect> {
+  data class Activation(
+    val events: List<GameEvent>,
+    val request: ProgramRequest,
+  )
+
+  fun matchingReplacements(
+    state: GameState,
+    event: GameEvent,
+    continuous: ContinuousEffectProcessor,
+    evaluator: RulesEngine,
+  ): List<ActiveEffect> {
     return state.activeEffects.filter { effect ->
       val modifier = effect.modifier
-      modifier is Modifier.ReplacementModifier && event.type in modifier.definition.pattern.eventTypes
+      if (modifier !is Modifier.ReplacementModifier) return@filter false
+      if (event.type !in modifier.definition.pattern.eventTypes) return@filter false
+      if (!continuous.isEffectActive(state, effect)) return@filter false
+      val condition = modifier.definition.condition
+      if (condition != null) {
+        val ctx = EffectContext(
+          gameId = state.id,
+          controllerId = effect.controllerId,
+          sourceCardId = effect.sourceCardId,
+          abilityId = effect.sourceAbilityId,
+          triggeringEvent = event,
+        )
+        when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
+          is EvaluationResult.Failed -> return@filter false
+          is EvaluationResult.Success -> if (!result.value) return@filter false
+        }
+      }
+      true
     }.sortedWith(compareBy<ActiveEffect> {
       (it.modifier as Modifier.ReplacementModifier).definition.priority
     }.thenBy { it.timestampSequence })
@@ -972,26 +1028,26 @@ internal class ReplacementProcessor {
 
   fun buildActivation(
     state: GameState,
+    nextSequence: Long,
     effect: ActiveEffect,
     replacedEvent: GameEvent,
-  ): Pair<GameEvent, ProgramRequest>? {
+  ): Activation? {
     val modifier = effect.modifier as? Modifier.ReplacementModifier ?: return null
-    val sequence = state.lastEventSequence + 1
-    val activationId = EffectId("${state.id.value}:repl:$sequence")
+    val activationId = EffectId("${state.id.value}:repl:$nextSequence")
     val activated = GameEvent(
-      id = EventId("${state.id.value}:$sequence"),
-      sequence = sequence,
+      id = EventId("${state.id.value}:$nextSequence"),
+      sequence = nextSequence,
       type = GameEventType.EFFECT_ACTIVATED,
       sourceCardId = effect.sourceCardId,
       payload = GameEventPayload.EffectActivatedPayload(
         effectId = activationId,
         sourceCardId = effect.sourceCardId,
-        abilityId = effect.sourceAbilityId,
+        abilityId = null,
       ),
       visibility = EventVisibility.PUBLIC,
     )
-    val appliedSequence = sequence + 1
-    GameEvent(
+    val appliedSequence = nextSequence + 1
+    val applied = GameEvent(
       id = EventId("${state.id.value}:$appliedSequence"),
       sequence = appliedSequence,
       type = GameEventType.REPLACEMENT_APPLIED,
@@ -1002,9 +1058,8 @@ internal class ReplacementProcessor {
       ),
       visibility = EventVisibility.PUBLIC,
     )
-    val executionId = ExecutionId("${activated.id.value}:exec")
     val request = ProgramRequest(
-      executionId = executionId,
+      executionId = ExecutionId("${activated.id.value}:exec"),
       program = modifier.definition.program,
       context = EffectContext(
         gameId = state.id,
@@ -1014,7 +1069,7 @@ internal class ReplacementProcessor {
         triggeringEvent = replacedEvent,
       ),
     )
-    return activated to request
+    return Activation(listOf(activated, applied), request)
   }
 }
 

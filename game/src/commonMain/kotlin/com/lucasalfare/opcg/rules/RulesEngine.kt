@@ -130,8 +130,9 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     }
   }
 
-  fun advanceBattleStep(state: GameState): GameTransition =
-    battleResolver.advanceStep(state, continuousEffectProcessor, damageProcessor, this)
+  fun advanceBattleStep(state: GameState): GameTransition = battleResolver.advanceStep(
+    state, continuousEffectProcessor, damageProcessor, this, replacementProcessor,
+  )
 
   fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
     if (events.isEmpty()) return GameTransition(emptyList(), emptyList())
@@ -466,7 +467,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       }
 
       is KnockOut -> damageProcessor.executeKnockOut(
-        state, instruction, context, variables, replacementProcessor, continuousEffectProcessor, cardCatalog,
+        state, instruction, context, variables, replacementProcessor, continuousEffectProcessor, cardCatalog, this,
       )
 
       is DealDamage -> damageProcessor.executeDealDamage(

@@ -951,8 +951,7 @@ internal class BattleResolver(
 
     val payments =
       costResolver.preview(state, command.playerId, ability.cost, command.cardId, evaluator) ?: return GameTransition(
-        emptyList(),
-        emptyList()
+        emptyList(), emptyList()
       )
     val events = costResolver.events(state, command.playerId, payments).toMutableList()
     var seq = state.lastEventSequence + events.size
@@ -1049,6 +1048,7 @@ internal class BattleResolver(
     continuous: ContinuousEffectProcessor,
     damageProcessor: DamageProcessor,
     evaluator: RulesEngine,
+    replacementProcessor: ReplacementProcessor,
   ): GameTransition {
     val battle = state.battle ?: return GameTransition(emptyList(), emptyList())
     if (!participantsPresent(state, battle)) {
@@ -1058,7 +1058,7 @@ internal class BattleResolver(
       BattleStep.ATTACK -> moveToStep(state, BattleStep.BLOCK)
       BattleStep.BLOCK -> moveToStep(state, BattleStep.COUNTER)
       BattleStep.COUNTER -> moveToStep(state, BattleStep.DAMAGE)
-      BattleStep.DAMAGE -> damageProcessor.processDamage(state, battle, continuous, evaluator)
+      BattleStep.DAMAGE -> damageProcessor.processDamage(state, battle, continuous, evaluator, replacementProcessor)
       BattleStep.END -> endBattle(state, battle, BattleOutcome.NO_DAMAGE)
     }
   }
@@ -1450,13 +1450,7 @@ internal class EffectScheduler(
     if (pattern.source != null) {
       val sourceId = event.sourceCardId ?: return false
       if (!cardMatchesSelector(
-          pattern.source,
-          state,
-          sourceId,
-          controllerId,
-          evaluator,
-          event,
-          sourceCardId
+          pattern.source, state, sourceId, controllerId, evaluator, event, sourceCardId
         )
       ) return false
     }
