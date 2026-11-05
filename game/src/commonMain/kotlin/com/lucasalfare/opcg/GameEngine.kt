@@ -693,24 +693,32 @@ class GameEngine private constructor(
       val frame = state.activePrograms.firstOrNull { it.pendingChoiceId == choice.choiceId }
       if (frame != null) {
         val vmResult = runVmResume(frame, choice, transactionEvents)
-        if (vmResult != null) return vmResult
+        if (vmResult != null) {
+          appendTransaction(command, transactionEvents)
+          return vmResult
+        }
       }
     }
 
     for (request in transition.programsToRun) {
       val vmResult = runVmStart(request, transactionEvents)
-      if (vmResult != null) return vmResult
+      if (vmResult != null) {
+        appendTransaction(command, transactionEvents)
+        return vmResult
+      }
     }
 
     val autoResult = drainAutomaticWork(transactionEvents)
-    if (autoResult != null) return autoResult
+    if (autoResult != null) {
+      appendTransaction(command, transactionEvents)
+      return autoResult
+    }
 
     if (command is ResolveMulliganCommand) {
       checkMulligansComplete(transactionEvents)
     }
 
-    val logEntry = buildEntry(command, transactionEvents)
-    history.append(logEntry)
+    appendTransaction(command, transactionEvents)
 
     return if (state.pendingChoices.isNotEmpty()) {
       val blocking = state.pendingChoices.first()
@@ -1145,8 +1153,12 @@ class GameEngine private constructor(
   private fun checkMulligansComplete(accumulated: MutableList<GameEvent>) {
     val setup = state.setup ?: return
     if (setup.step == GameSetupStep.MULLIGAN && setup.pendingMulliganPlayers.isEmpty()) {
+      val before = accumulated.size
       advanceToLife(accumulated)
-      recordAutoEntry(accumulated)
+      val newEvents = accumulated.subList(before, accumulated.size).toList()
+      if (newEvents.isNotEmpty()) {
+        history.append(buildEntry(null, newEvents))
+      }
     }
   }
 
@@ -1244,6 +1256,11 @@ class GameEngine private constructor(
         is EventVisibility.INTERNAL -> false
       }
     }
+  }
+
+  private fun appendTransaction(command: GameCommand?, events: List<GameEvent>) {
+    if (events.isEmpty()) return
+    history.append(buildEntry(command, events))
   }
 }
 
