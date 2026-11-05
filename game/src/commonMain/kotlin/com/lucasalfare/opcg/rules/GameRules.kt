@@ -1331,6 +1331,108 @@ internal class EffectScheduler(
     return GameTransition(events = outEvents, programsToRun = programs)
   }
 
+  fun evaluatePermanentAbilities(
+    state: GameState,
+    baseSequence: Long = state.lastEventSequence,
+  ): GameTransition {
+    val desired = mutableMapOf<EffectId, ActiveEffect>()
+
+    for (player in state.players.values) {
+      val inPlayCards = mutableListOf<CardInstanceId>()
+      inPlayCards += player.leader.cards
+      inPlayCards += player.characters.cards
+      inPlayCards += player.stage.cards
+
+      for (cardId in inPlayCards) {
+        val instance = state.cards[cardId] ?: continue
+        val definition = cardCatalog.get(instance.definitionId) ?: continue
+        val permanents = definition.abilities.filterIsInstance<PermanentAbilityDefinition>()
+        if (permanents.isEmpty()) continue
+
+        val controller = continuous.effectiveController(state, cardId) ?: instance.controllerId
+        val baseCtx = EffectContext(
+          gameId = state.id,
+          controllerId = controller,
+          sourceCardId = cardId,
+          abilityId = null,
+          triggeringEvent = null,
+        )
+
+        for (ability in permanents) {
+          val effectId = EffectId("permanent:${cardId.value}:${ability.id.value}")
+
+          val conditionHolds = if (ability.condition == null) {
+            true
+          } else {
+            when (val result = evaluator.evaluateCondition(ability.condition, state, baseCtx, emptyMap())) {
+              is EvaluationResult.Failed -> false
+              is EvaluationResult.Success -> result.value
+            }
+          }
+          if (!conditionHolds) continue
+
+          val targetCardIds = if (ability.selector == null) {
+            listOf(cardId)
+          } else {
+            val selectorCtx = baseCtx.copy(abilityId = ability.id)
+            evaluator.selectCardIds(ability.selector, state, selectorCtx) ?: continue
+          }
+
+          val existing = state.activeEffects.firstOrNull { it.id == effectId }
+          val timestamp = existing?.timestampSequence ?: (baseSequence + 1)
+
+          desired[effectId] = ActiveEffect(
+            id = effectId,
+            sourceCardId = cardId,
+            sourceAbilityId = ability.id,
+            controllerId = controller,
+            targetCardIds = targetCardIds,
+            targetPlayerId = null,
+            modifier = ability.modifier,
+            duration = Duration.WhileSourceValid,
+            timestampSequence = timestamp,
+          )
+        }
+      }
+    }
+
+    val existingPermanentEffects = state.activeEffects.filter { it.id.value.startsWith("permanent:") }
+    val events = mutableListOf<GameEvent>()
+    var seq = baseSequence
+
+    for (existing in existingPermanentEffects) {
+      val target = desired[existing.id]
+      if (target != existing) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.MODIFIER_EXPIRED,
+          sourceCardId = existing.sourceCardId,
+          payload = GameEventPayload.ModifierExpiredPayload(existing.id),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
+    }
+
+    for ((id, target) in desired) {
+      val existing = existingPermanentEffects.firstOrNull { it.id == id }
+      if (existing != target) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.MODIFIER_ADDED,
+          sourceCardId = target.sourceCardId,
+          payload = GameEventPayload.ModifierAddedPayload(target),
+          visibility = EventVisibility.PUBLIC,
+        )
+      }
+    }
+
+    return GameTransition(events, emptyList())
+  }
+
   private data class ScheduledAuto(
     val cardId: CardInstanceId,
     val controllerId: PlayerId,
@@ -1499,11 +1601,11 @@ internal class EffectScheduler(
     )
   }
 
-  private fun matchesPattern(
+  internal fun matchesPattern(
     pattern: GameEventPattern,
     event: GameEvent,
     state: GameState,
-    sourceCardId: CardInstanceId,
+    sourceCardId: CardInstanceId?,
     controllerId: PlayerId,
     evaluator: RulesEngine,
   ): Boolean {
@@ -1512,7 +1614,13 @@ internal class EffectScheduler(
     if (pattern.source != null) {
       val sourceId = event.sourceCardId ?: return false
       if (!cardMatchesSelector(
-          pattern.source, state, sourceId, controllerId, evaluator, event, sourceCardId
+          pattern.source,
+          state,
+          sourceId,
+          controllerId,
+          evaluator,
+          event,
+          sourceCardId
         )
       ) return false
     }
@@ -1521,9 +1629,7 @@ internal class EffectScheduler(
       val targetIds = extractTargetCardIds(event)
       if (targetIds.isEmpty()) return false
       if (targetIds.none {
-          cardMatchesSelector(
-            pattern.target, state, it, controllerId, evaluator, event, sourceCardId
-          )
+          cardMatchesSelector(pattern.target, state, it, controllerId, evaluator, event, sourceCardId)
         }) return false
     }
 

@@ -11,7 +11,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val costProcessor = CostProcessor()
   private val continuousEffectProcessor = ContinuousEffectProcessor(cardCatalog, this)
   private val effectScheduler = EffectScheduler(cardCatalog, continuousEffectProcessor, this)
-  private val replacementProcessor = ReplacementProcessor()
+  private val replacementProcessor = ReplacementProcessor(cardCatalog, effectScheduler)
   private val ruleProcessor = RuleProcessor()
   private val informationManager = InformationManager()
   private val loopProcessor = LoopProcessor()
@@ -169,6 +169,11 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
 
   fun effectiveCharacteristics(state: GameState, cardId: CardInstanceId): EffectiveCharacteristics? =
     continuousEffectProcessor.effectiveCharacteristics(state, cardId)
+
+  fun evaluatePermanentAbilities(
+    state: GameState,
+    baseSequence: Long = state.lastEventSequence,
+  ): GameTransition = effectScheduler.evaluatePermanentAbilities(state, baseSequence)
 
   fun effectiveController(state: GameState, cardId: CardInstanceId): PlayerId? =
     continuousEffectProcessor.effectiveController(state, cardId)

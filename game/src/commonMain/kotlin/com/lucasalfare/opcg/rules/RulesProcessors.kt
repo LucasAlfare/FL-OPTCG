@@ -1071,7 +1071,10 @@ internal class ContinuousEffectProcessor(
   }
 }
 
-internal class ReplacementProcessor {
+internal class ReplacementProcessor(
+  private val cardCatalog: CardCatalog,
+  private val effectScheduler: EffectScheduler,
+) {
 
   data class Activation(
     val events: List<GameEvent>,
@@ -1084,29 +1087,65 @@ internal class ReplacementProcessor {
     continuous: ContinuousEffectProcessor,
     evaluator: RulesEngine,
   ): List<ActiveEffect> {
-    return state.activeEffects.filter { effect ->
-      val modifier = effect.modifier
-      if (modifier !is Modifier.ReplacementModifier) return@filter false
-      if (event.type !in modifier.definition.pattern.eventTypes) return@filter false
-      if (!continuous.isEffectActive(state, effect)) return@filter false
-      val condition = modifier.definition.condition
-      if (condition != null) {
-        val ctx = EffectContext(
-          gameId = state.id,
-          controllerId = effect.controllerId,
-          sourceCardId = effect.sourceCardId,
-          abilityId = effect.sourceAbilityId,
-          triggeringEvent = event,
+    val candidates = mutableListOf<Pair<ActiveEffect, Int>>()
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.ReplacementModifier ?: continue
+      val definition = modifier.definition
+
+      if (!continuous.isEffectActive(state, effect)) continue
+      if (!effectScheduler.matchesPattern(
+          definition.pattern, event, state, effect.sourceCardId, effect.controllerId, evaluator,
         )
-        when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
-          is EvaluationResult.Failed -> return@filter false
-          is EvaluationResult.Success -> if (!result.value) return@filter false
+      ) continue
+      if (!conditionHolds(
+          state,
+          event,
+          effect.controllerId,
+          effect.sourceCardId,
+          effect.sourceAbilityId,
+          definition.condition,
+          evaluator
+        )
+      ) continue
+
+      candidates += effect to definition.priority
+    }
+
+    for (player in state.players.values) {
+      val inPlay = player.leader.cards + player.characters.cards + player.stage.cards
+      for (cardId in inPlay) {
+        val instance = state.cards[cardId] ?: continue
+        val cardDef = cardCatalog.get(instance.definitionId) ?: continue
+        val declarative = cardDef.abilities.filterIsInstance<ReplacementAbilityDefinition>()
+        if (declarative.isEmpty()) continue
+
+        val controller = continuous.effectiveController(state, cardId) ?: instance.controllerId
+
+        for (ability in declarative) {
+          val definition = ability.replacement
+          if (!effectScheduler.matchesPattern(definition.pattern, event, state, cardId, controller, evaluator)) continue
+          if (!conditionHolds(state, event, controller, cardId, ability.id, definition.condition, evaluator)) continue
+
+          val synthetic = ActiveEffect(
+            id = EffectId("declarative-repl:${cardId.value}:${ability.id.value}"),
+            sourceCardId = cardId,
+            sourceAbilityId = ability.id,
+            controllerId = controller,
+            targetCardIds = emptyList(),
+            targetPlayerId = null,
+            modifier = Modifier.ReplacementModifier(definition),
+            duration = Duration.WhileSourceValid,
+            timestampSequence = 0L,
+          )
+          candidates += synthetic to definition.priority
         }
       }
-      true
-    }.sortedWith(compareBy<ActiveEffect> {
-      (it.modifier as Modifier.ReplacementModifier).definition.priority
-    }.thenBy { it.timestampSequence })
+    }
+
+    return candidates.sortedWith(
+        compareBy<Pair<ActiveEffect, Int>> { it.second }.thenBy { it.first.timestampSequence }
+          .thenBy { it.first.id.value },
+      ).map { it.first }
   }
 
   fun buildActivation(
@@ -1153,6 +1192,29 @@ internal class ReplacementProcessor {
       ),
     )
     return Activation(listOf(activated, applied), request)
+  }
+
+  private fun conditionHolds(
+    state: GameState,
+    event: GameEvent,
+    controllerId: PlayerId,
+    sourceCardId: CardInstanceId?,
+    abilityId: AbilityId?,
+    condition: Condition?,
+    evaluator: RulesEngine,
+  ): Boolean {
+    if (condition == null) return true
+    val ctx = EffectContext(
+      gameId = state.id,
+      controllerId = controllerId,
+      sourceCardId = sourceCardId,
+      abilityId = abilityId,
+      triggeringEvent = event,
+    )
+    return when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
+      is EvaluationResult.Failed -> false
+      is EvaluationResult.Success -> result.value
+    }
   }
 }
 

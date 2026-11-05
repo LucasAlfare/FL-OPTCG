@@ -957,7 +957,13 @@ class GameEngine private constructor(
       val hasWork =
         autoEvents.events.isNotEmpty() || autoEvents.programsToRun.isNotEmpty() || autoRules.events.isNotEmpty() || autoRules.programsToRun.isNotEmpty()
 
-      if (!hasWork) return null
+      if (!hasWork) {
+        val autoPermanents = rulesEngine.evaluatePermanentAbilities(state, state.lastEventSequence)
+        if (autoPermanents.events.isEmpty()) return null
+        state = reducer.apply(state, autoPermanents.events)
+        accumulated += autoPermanents.events
+        continue
+      }
 
       for (transition in listOf(autoEvents, autoRules)) {
         if (transition.events.isNotEmpty()) {

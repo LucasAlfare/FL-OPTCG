@@ -56,6 +56,7 @@ class CardProgramValidator {
       is PermanentAbilityDefinition -> {
         val issues = mutableListOf<ProgramValidationIssue>()
         ability.condition?.let { issues += validateCondition(it, path) }
+        ability.selector?.let { issues += validateSelector(it, path) }
         issues += validateModifier(ability.modifier, path, depth + 1)
         issues
       }

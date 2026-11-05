@@ -271,6 +271,7 @@ data class ActivatedAbilityDefinition(
 data class PermanentAbilityDefinition(
   override val id: AbilityId,
   val condition: Condition?,
+  val selector: CardSelector? = null,
   val modifier: Modifier,
 ) : AbilityDefinition
 
