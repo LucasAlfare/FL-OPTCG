@@ -619,6 +619,7 @@ internal class LoopProcessor {
 
 internal class ContinuousEffectProcessor(
   private val cardCatalog: CardCatalog,
+  private val evaluator: RulesEngine,
 ) {
 
   fun effectiveController(state: GameState, cardId: CardInstanceId): PlayerId? {
@@ -737,13 +738,13 @@ internal class ContinuousEffectProcessor(
   }
 
   fun isEffectActive(state: GameState, effect: ActiveEffect): Boolean {
-    if (effect.duration is Duration.WhileSourceValid) {
-      val source = effect.sourceCardId ?: return false
-      if (source !in state.cards) return false
+    return when (val duration = effect.duration) {
+      is Duration.Permanent -> true
+      is Duration.DuringBattle -> state.battle != null
+      is Duration.WhileSourceValid -> isSourceValid(state, effect.sourceCardId)
+      is Duration.WhileCondition -> isConditionSatisfied(state, effect, duration.condition)
+      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent -> true
     }
-    if (effect.duration is Duration.Permanent) return true
-    if (effect.duration is Duration.DuringBattle) return state.battle != null
-    return true
   }
 
   fun effectsToExpire(state: GameState, triggeringEvents: List<GameEvent>): List<ActiveEffect> {
@@ -751,7 +752,9 @@ internal class ContinuousEffectProcessor(
     for (effect in state.activeEffects) {
       when (val duration = effect.duration) {
         is Duration.UntilEndOfTurn -> {
-          if (triggeringEvents.any { it.type == GameEventType.TURN_ENDED }) expired += effect
+          if (triggeringEvents.any { it.type == GameEventType.TURN_ENDED } || turnIdentityChanged(state)) {
+            expired += effect
+          }
         }
 
         is Duration.UntilEndOfPhase -> {
@@ -763,21 +766,74 @@ internal class ContinuousEffectProcessor(
         }
 
         is Duration.UntilEvent -> {
-          if (triggeringEvents.any { matchesPattern(duration.pattern, it, state) }) expired += effect
+          if (triggeringEvents.any { matchesPattern(duration.pattern, it) }) expired += effect
         }
 
         is Duration.WhileSourceValid -> {
-          val source = effect.sourceCardId
-          if (source == null || source !in state.cards) expired += effect
+          if (!isSourceValid(state, effect.sourceCardId)) expired += effect
         }
 
-        else -> Unit
+        is Duration.WhileCondition -> {
+          if (!isConditionSatisfied(state, effect, duration.condition)) expired += effect
+        }
+
+        is Duration.Permanent -> Unit
       }
     }
     return expired
   }
 
-  private fun matchesPattern(pattern: GameEventPattern, event: GameEvent, state: GameState): Boolean {
+  private fun turnIdentityChanged(state: GameState): Boolean = false
+
+  private fun isSourceValid(state: GameState, sourceCardId: CardInstanceId?): Boolean {
+    if (sourceCardId == null) return false
+    if (state.cards[sourceCardId] == null) return false
+    val zone = zoneOf(state, sourceCardId) ?: return false
+    val definition = state.cards[sourceCardId]?.let { cardCatalog.get(it.definitionId) } ?: return true
+    return when (definition.category) {
+      CardCategory.LEADER -> zone == ZoneType.LEADER
+      CardCategory.CHARACTER -> zone == ZoneType.CHARACTER
+      CardCategory.STAGE -> zone == ZoneType.STAGE
+      CardCategory.EVENT -> zone == ZoneType.TRASH || zone == ZoneType.HAND
+      CardCategory.DON -> zone == ZoneType.COST || zone == ZoneType.DON_DECK || zone == ZoneType.ATTACHED_DON
+    }
+  }
+
+  private fun isConditionSatisfied(
+    state: GameState,
+    effect: ActiveEffect,
+    condition: Condition,
+  ): Boolean {
+    val ctx = EffectContext(
+      gameId = state.id,
+      controllerId = effect.controllerId,
+      sourceCardId = effect.sourceCardId,
+      abilityId = effect.sourceAbilityId,
+      triggeringEvent = null,
+    )
+    return when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
+      is EvaluationResult.Failed -> false
+      is EvaluationResult.Success -> result.value
+    }
+  }
+
+  private fun zoneOf(state: GameState, cardId: CardInstanceId): ZoneType? {
+    for (player in state.players.values) {
+      if (cardId in player.leader.cards) return ZoneType.LEADER
+      if (cardId in player.characters.cards) return ZoneType.CHARACTER
+      if (cardId in player.stage.cards) return ZoneType.STAGE
+      if (cardId in player.hand.cards) return ZoneType.HAND
+      if (cardId in player.deck.cards) return ZoneType.DECK
+      if (cardId in player.trash.cards) return ZoneType.TRASH
+      if (cardId in player.cost.cards) return ZoneType.COST
+      if (cardId in player.life.cards) return ZoneType.LIFE
+      if (cardId in player.donDeck.cards) return ZoneType.DON_DECK
+    }
+    if (state.donAttachments.any { cardId in it.donCardIds }) return ZoneType.ATTACHED_DON
+    return null
+  }
+
+  private fun matchesPattern(pattern: GameEventPattern, event: GameEvent): Boolean {
     return !(pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes)
   }
 

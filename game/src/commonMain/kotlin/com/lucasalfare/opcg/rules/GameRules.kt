@@ -551,8 +551,8 @@ internal class BattleResolver(
     command: PassBattleStepCommand,
     continuous: ContinuousEffectProcessor,
   ): ValidationResult {
-    val battle = state.battle
-      ?: return ValidationResult(false, listOf(RuleViolation("NO_BATTLE", "No battle in progress")))
+    val battle =
+      state.battle ?: return ValidationResult(false, listOf(RuleViolation("NO_BATTLE", "No battle in progress")))
     val expected = expectedBattleActor(state, battle, continuous)
     if (expected != null && command.playerId != expected) {
       return ValidationResult(
@@ -852,9 +852,7 @@ internal class BattleResolver(
       ?.firstOrNull { it.timing == ActivationTiming.COUNTER_STEP }
     if (counterAbility == null) {
       violations += RuleViolation("NO_COUNTER_ABILITY", "Event has no Counter Step ability")
-    } else if (
-      costResolver.preview(state, command.playerId, counterAbility.cost, command.cardId, evaluator) == null
-    ) {
+    } else if (costResolver.preview(state, command.playerId, counterAbility.cost, command.cardId, evaluator) == null) {
       violations += RuleViolation("COST_UNPAID", "Unable to pay Counter cost")
     }
     if (battle != null) {
@@ -879,8 +877,11 @@ internal class BattleResolver(
     val ability = def.abilities.filterIsInstance<ActivatedAbilityDefinition>()
       .firstOrNull { it.timing == ActivationTiming.COUNTER_STEP } ?: return GameTransition(emptyList(), emptyList())
 
-    val payments = costResolver.preview(state, command.playerId, ability.cost, command.cardId, evaluator)
-      ?: return GameTransition(emptyList(), emptyList())
+    val payments =
+      costResolver.preview(state, command.playerId, ability.cost, command.cardId, evaluator) ?: return GameTransition(
+        emptyList(),
+        emptyList()
+      )
     val events = costResolver.events(state, command.playerId, payments).toMutableList()
     var seq = state.lastEventSequence + events.size
     val programs = mutableListOf<ProgramRequest>()
@@ -1280,6 +1281,7 @@ internal class EffectScheduler(
         ActivationTiming.ON_TRIGGER -> zone == ZoneType.LIFE || zone == ZoneType.HAND || zone == ZoneType.TRASH
         else -> zone == ZoneType.HAND
       }
+
       CardCategory.DON -> false
     }
   }
@@ -1328,7 +1330,16 @@ internal class EffectScheduler(
 
     if (pattern.source != null) {
       val sourceId = event.sourceCardId ?: return false
-      if (!cardMatchesSelector(pattern.source, state, sourceId, controllerId, evaluator, event, sourceCardId)) return false
+      if (!cardMatchesSelector(
+          pattern.source,
+          state,
+          sourceId,
+          controllerId,
+          evaluator,
+          event,
+          sourceCardId
+        )
+      ) return false
     }
 
     if (pattern.target != null) {
@@ -1417,10 +1428,12 @@ internal class EffectScheduler(
       is BattleTarget.CardTarget -> listOf(t.cardInstanceId)
       is BattleTarget.PlayerTarget -> emptyList()
     }
+
     is GameEventPayload.BlockActivatedPayload -> when (val t = p.previousTarget) {
       is BattleTarget.CardTarget -> listOf(t.cardInstanceId)
       is BattleTarget.PlayerTarget -> emptyList()
     }
+
     is GameEventPayload.DonAttachedPayload -> listOf(p.hostCardId)
     is GameEventPayload.CardsDrawnPayload -> p.cardIds
     else -> event.sourceCardId?.let { listOf(it) } ?: emptyList()
@@ -1606,10 +1619,7 @@ internal class EffectScheduler(
       ActivationTiming.END_OF_YOUR_TURN -> turn != null && turn.phase == GamePhase.END && turn.playerId == playerId
       ActivationTiming.END_OF_OPPONENT_TURN -> turn != null && turn.phase == GamePhase.END && turn.playerId != playerId
       ActivationTiming.AT_GAME_START -> state.setup?.step == GameSetupStep.INITIAL_EFFECTS
-      ActivationTiming.ON_PLAY,
-      ActivationTiming.ON_KO,
-      ActivationTiming.ON_OPPONENT_ATTACK,
-      ActivationTiming.ON_TRIGGER -> !forManual
+      ActivationTiming.ON_PLAY, ActivationTiming.ON_KO, ActivationTiming.ON_OPPONENT_ATTACK, ActivationTiming.ON_TRIGGER -> !forManual
     }
   }
 
@@ -1789,8 +1799,8 @@ internal class CostResolver {
 
       is Cost.TrashCardsCost -> {
         val amount = costAmount(state, playerId, sourceCardId, cost.amount, evaluator) ?: return null
-        val cards = selectTrashCards(state, playerId, sourceCardId, cost.selector, amount, evaluator, reserved)
-          ?: return null
+        val cards =
+          selectTrashCards(state, playerId, sourceCardId, cost.selector, amount, evaluator, reserved) ?: return null
         listOf(CostPayment.TrashCards(cards))
       }
 
@@ -1850,12 +1860,9 @@ internal class CostResolver {
     val player = state.players[playerId] ?: return null
     val context = EffectContext(state.id, playerId, sourceCardId, null, null)
     val matches = evaluator.selectCardIds(selector, state, context) ?: return null
-    val chosen = matches.asSequence()
-      .filter { it !in reserved && state.cards[it]?.ownerId == playerId }
-      .mapNotNull { id -> zoneOf(player, id)?.let { ZonedCard(id, it) } }
-      .filter { it.zone in selector.zones }
-      .take(amount)
-      .toList()
+    val chosen = matches.asSequence().filter { it !in reserved && state.cards[it]?.ownerId == playerId }
+      .mapNotNull { id -> zoneOf(player, id)?.let { ZonedCard(id, it) } }.filter { it.zone in selector.zones }
+      .take(amount).toList()
     if (chosen.size < amount) return null
     reserved += chosen.map { it.cardId }
     return chosen
