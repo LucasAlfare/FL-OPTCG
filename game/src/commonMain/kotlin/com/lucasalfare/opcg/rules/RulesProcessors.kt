@@ -12,7 +12,8 @@ internal class DamageProcessor(
     continuous: ContinuousEffectProcessor,
     evaluator: RulesEngine,
   ): GameTransition {
-    state.cards[battle.attackerId] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+    state.cards[battle.attackerId] ?: return endBattleOnly(state, battle, BattleOutcome.INTERRUPTED)
+
     val attackerPower = continuous.effectiveCharacteristics(state, battle.attackerId)?.power ?: 0
 
     val targetPlayerId: PlayerId
@@ -22,9 +23,9 @@ internal class DamageProcessor(
     when (val target = battle.currentTarget) {
       is BattleTarget.CardTarget -> {
         val targetCard =
-          state.cards[target.cardInstanceId] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+          state.cards[target.cardInstanceId] ?: return endBattleOnly(state, battle, BattleOutcome.INTERRUPTED)
         val targetController = continuous.effectiveController(state, target.cardInstanceId) ?: targetCard.controllerId
-        val player = state.players[targetController] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
+        val player = state.players[targetController] ?: return endBattleOnly(state, battle, BattleOutcome.INTERRUPTED)
         isLeaderTarget = target.cardInstanceId in player.leader.cards
         targetPlayerId = targetController
         targetCardId = target.cardInstanceId
@@ -37,11 +38,13 @@ internal class DamageProcessor(
       }
     }
 
-    val targetBasePower = targetCardId?.let { continuous.effectiveCharacteristics(state, it)?.power ?: 0 } ?: 0
+    val targetBasePower = targetCardId?.let {
+      continuous.effectiveCharacteristics(state, it)?.power ?: 0
+    } ?: 0
     val finalTargetPower = targetBasePower + battle.counterPower
 
     if (attackerPower < finalTargetPower) {
-      return endBattleResult(state, battle, BattleOutcome.ATTACKER_LOST)
+      return endBattleOnly(state, battle, BattleOutcome.ATTACKER_LOST)
     }
 
     val events = mutableListOf<GameEvent>()
@@ -49,118 +52,28 @@ internal class DamageProcessor(
     var seq = state.lastEventSequence
 
     if (isLeaderTarget) {
-      val defenderPlayer =
-        state.players[targetPlayerId] ?: return endBattleResult(state, battle, BattleOutcome.INTERRUPTED)
-      if (defenderPlayer.life.cards.isEmpty()) {
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.PLAYER_LOST,
-          sourceCardId = battle.attackerId,
-          payload = GameEventPayload.PlayerLostPayload(targetPlayerId, GameEndReason.LIFE_DEFEAT),
-          visibility = EventVisibility.PUBLIC,
-        )
-        return GameTransition(events, programs)
-      }
-
       val attackerChars = continuous.effectiveCharacteristics(state, battle.attackerId)
       val isDoubleAttack = attackerChars?.keywords?.contains(KeywordEffect.DOUBLE_ATTACK) == true
       val isBanish = attackerChars?.keywords?.contains(KeywordEffect.BANISH) == true
       val damageCount = if (isDoubleAttack) 2 else 1
 
-      for (i in 0 until damageCount) {
-        val currentDefender = state.players[targetPlayerId] ?: break
-        if (currentDefender.life.cards.isEmpty()) {
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.PLAYER_LOST,
-            sourceCardId = battle.attackerId,
-            payload = GameEventPayload.PlayerLostPayload(targetPlayerId, GameEndReason.LIFE_DEFEAT),
-            visibility = EventVisibility.PUBLIC,
-          )
-          break
-        }
+      val prevention = evaluateDamagePrevention(state, targetPlayerId, evaluator, continuous)
 
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.DAMAGE_PROCESSED,
-          sourceCardId = battle.attackerId,
-          payload = GameEventPayload.DamageProcessedPayload(targetPlayerId, 1, battle.attackerId, null),
-          visibility = EventVisibility.PUBLIC,
-        )
-
-        val lifeCardId = currentDefender.life.cards.first()
-        if (isBanish) {
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.CARD_MOVED,
-            sourceCardId = lifeCardId,
-            payload = GameEventPayload.CardMovedPayload(
-              cardId = lifeCardId,
-              fromPlayerId = targetPlayerId,
-              fromZone = ZoneType.LIFE,
-              toPlayerId = targetPlayerId,
-              toZone = ZoneType.TRASH,
-              destinationIndex = null,
-              newObjectId = null,
-              orientation = CardOrientation.NOT_APPLICABLE,
-              faceState = FaceState.FACE_UP,
-              visibility = CardVisibility.PUBLIC,
-            ),
-            visibility = EventVisibility.PUBLIC,
-          )
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.LIFE_CHANGED,
-            sourceCardId = null,
-            payload = GameEventPayload.LifeChangedPayload(
-              targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.TRASH
-            ),
-            visibility = EventVisibility.PUBLIC,
-          )
-        } else {
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.CARD_MOVED,
-            sourceCardId = lifeCardId,
-            payload = GameEventPayload.CardMovedPayload(
-              cardId = lifeCardId,
-              fromPlayerId = targetPlayerId,
-              fromZone = ZoneType.LIFE,
-              toPlayerId = targetPlayerId,
-              toZone = ZoneType.HAND,
-              destinationIndex = null,
-              newObjectId = null,
-              orientation = CardOrientation.NOT_APPLICABLE,
-              faceState = FaceState.FACE_DOWN,
-              visibility = CardVisibility.OWNER_ONLY,
-            ),
-            visibility = EventVisibility.PUBLIC,
-          )
-          seq += 1
-          events += GameEvent(
-            id = EventId("${state.id.value}:$seq"),
-            sequence = seq,
-            type = GameEventType.LIFE_CHANGED,
-            sourceCardId = null,
-            payload = GameEventPayload.LifeChangedPayload(
-              targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.HAND
-            ),
-            visibility = EventVisibility.PUBLIC,
-          )
-        }
-      }
+      val result = applyLifeDamage(
+        state = state,
+        targetPlayerId = targetPlayerId,
+        attackerId = battle.attackerId,
+        effectId = null,
+        isBanish = isBanish,
+        damageCount = damageCount,
+        prevention = prevention,
+        evaluator = evaluator,
+        startSeq = seq,
+        enableTrigger = true,
+      )
+      events += result.events
+      programs += result.programs
+      seq = result.lastSeq
     } else if (targetCardId != null) {
       val targetCard = state.cards[targetCardId]
       if (targetCard != null) {
@@ -198,8 +111,10 @@ internal class DamageProcessor(
       }
     }
 
-    val endBattleTransition = endBattleResult(state, battle, BattleOutcome.ATTACKER_WON)
-    return GameTransition(events + endBattleTransition.events, programs + endBattleTransition.programsToRun)
+    seq += 1
+    events += endBattleEvent(state, battle, BattleOutcome.ATTACKER_WON, seq)
+
+    return GameTransition(events, programs)
   }
 
   fun executeKnockOut(
@@ -274,76 +189,28 @@ internal class DamageProcessor(
     }.coerceAtLeast(0)
     if (amount == 0) return InstructionExecutionResult.Completed(null, emptyList())
 
-    val player = state.players[instruction.playerId] ?: return InstructionExecutionResult.Completed(null, emptyList())
+    state.players[instruction.playerId] ?: return InstructionExecutionResult.Completed(null, emptyList())
 
-    val events = mutableListOf<GameEvent>()
-    var seq = state.lastEventSequence
-    val remainingLife = player.life.cards.toMutableList()
-    var defeated = false
+    val isBanish = context.sourceCardId?.let { sourceId ->
+      continuous.effectiveCharacteristics(state, sourceId)?.keywords?.contains(KeywordEffect.BANISH) == true
+    } ?: false
 
-    for (i in 0 until amount) {
-      if (defeated) break
+    val prevention = evaluateDamagePrevention(state, instruction.playerId, evaluator, continuous)
 
-      seq += 1
-      events += GameEvent(
-        id = EventId("${state.id.value}:$seq"),
-        sequence = seq,
-        type = GameEventType.DAMAGE_PROCESSED,
-        sourceCardId = context.sourceCardId,
-        payload = GameEventPayload.DamageProcessedPayload(
-          instruction.playerId, 1, context.sourceCardId, instruction.effectId,
-        ),
-        visibility = EventVisibility.PUBLIC,
-      )
+    val result = applyLifeDamage(
+      state = state,
+      targetPlayerId = instruction.playerId,
+      attackerId = context.sourceCardId,
+      effectId = instruction.effectId,
+      isBanish = isBanish,
+      damageCount = amount,
+      prevention = prevention,
+      evaluator = evaluator,
+      startSeq = state.lastEventSequence,
+      enableTrigger = false,
+    )
 
-      if (remainingLife.isNotEmpty()) {
-        val lifeCardId = remainingLife.removeAt(0)
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.CARD_MOVED,
-          sourceCardId = lifeCardId,
-          payload = GameEventPayload.CardMovedPayload(
-            cardId = lifeCardId,
-            fromPlayerId = instruction.playerId,
-            fromZone = ZoneType.LIFE,
-            toPlayerId = instruction.playerId,
-            toZone = ZoneType.HAND,
-            destinationIndex = null,
-            newObjectId = null,
-            orientation = CardOrientation.NOT_APPLICABLE,
-            faceState = FaceState.FACE_DOWN,
-            visibility = CardVisibility.OWNER_ONLY,
-          ),
-          visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
-        )
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.LIFE_CHANGED,
-          sourceCardId = null,
-          payload = GameEventPayload.LifeChangedPayload(
-            instruction.playerId, emptyList(), listOf(lifeCardId), ZoneType.HAND,
-          ),
-          visibility = EventVisibility.PUBLIC,
-        )
-      } else {
-        seq += 1
-        events += GameEvent(
-          id = EventId("${state.id.value}:$seq"),
-          sequence = seq,
-          type = GameEventType.PLAYER_LOST,
-          sourceCardId = context.sourceCardId,
-          payload = GameEventPayload.PlayerLostPayload(instruction.playerId, GameEndReason.LIFE_DEFEAT),
-          visibility = EventVisibility.PUBLIC,
-        )
-        defeated = true
-      }
-    }
-
-    return InstructionExecutionResult.Completed(null, events)
+    return InstructionExecutionResult.Completed(null, result.events)
   }
 
   fun executeSetLife(
@@ -400,22 +267,254 @@ internal class DamageProcessor(
     return InstructionExecutionResult.Completed(null, events)
   }
 
-  private fun endBattleResult(state: GameState, battle: BattleState, outcome: BattleOutcome): GameTransition {
-    val seq = state.lastEventSequence + 1
-    val event = GameEvent(
+  private fun applyLifeDamage(
+    state: GameState,
+    targetPlayerId: PlayerId,
+    attackerId: CardInstanceId?,
+    effectId: EffectId?,
+    isBanish: Boolean,
+    damageCount: Int,
+    prevention: Int,
+    evaluator: RulesEngine,
+    startSeq: Long,
+    enableTrigger: Boolean,
+  ): LifeDamageResult {
+    val events = mutableListOf<GameEvent>()
+    val programs = mutableListOf<ProgramRequest>()
+    var seq = startSeq
+
+    val defenderPlayer = state.players[targetPlayerId] ?: return LifeDamageResult(events, programs, seq)
+    val remainingLife = defenderPlayer.life.cards.toMutableList()
+    var preventionRemaining = prevention
+    val consumedTriggerKeys = mutableSetOf<AbilityUsageKey>()
+
+    for (i in 0 until damageCount) {
+      if (preventionRemaining > 0) {
+        preventionRemaining -= 1
+        continue
+      }
+
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DAMAGE_PROCESSED,
+        sourceCardId = attackerId,
+        payload = GameEventPayload.DamageProcessedPayload(targetPlayerId, 1, attackerId, effectId),
+        visibility = EventVisibility.PUBLIC,
+      )
+
+      if (remainingLife.isEmpty()) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.PLAYER_LOST,
+          sourceCardId = attackerId,
+          payload = GameEventPayload.PlayerLostPayload(targetPlayerId, GameEndReason.LIFE_DEFEAT),
+          visibility = EventVisibility.PUBLIC,
+        )
+        break
+      }
+
+      val lifeCardId = remainingLife.removeAt(0)
+
+      if (isBanish) {
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = lifeCardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = lifeCardId,
+            fromPlayerId = targetPlayerId,
+            fromZone = ZoneType.LIFE,
+            toPlayerId = targetPlayerId,
+            toZone = ZoneType.TRASH,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_UP,
+            visibility = CardVisibility.PUBLIC,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.LIFE_CHANGED,
+          sourceCardId = null,
+          payload = GameEventPayload.LifeChangedPayload(
+            targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.TRASH
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+      } else {
+        seq += 1
+        val movedEvent = GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_MOVED,
+          sourceCardId = lifeCardId,
+          payload = GameEventPayload.CardMovedPayload(
+            cardId = lifeCardId,
+            fromPlayerId = targetPlayerId,
+            fromZone = ZoneType.LIFE,
+            toPlayerId = targetPlayerId,
+            toZone = ZoneType.HAND,
+            destinationIndex = null,
+            newObjectId = null,
+            orientation = CardOrientation.NOT_APPLICABLE,
+            faceState = FaceState.FACE_DOWN,
+            visibility = CardVisibility.OWNER_ONLY,
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+        events += movedEvent
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.LIFE_CHANGED,
+          sourceCardId = null,
+          payload = GameEventPayload.LifeChangedPayload(
+            targetPlayerId, emptyList(), listOf(lifeCardId), ZoneType.HAND
+          ),
+          visibility = EventVisibility.PUBLIC,
+        )
+
+        if (enableTrigger) {
+          val triggerSeq = seq + 1
+          val triggerResult = buildTriggerRequest(
+            state = state,
+            lifeCardId = lifeCardId,
+            controllerId = targetPlayerId,
+            triggerEvent = movedEvent,
+            seq = triggerSeq,
+            consumedKeys = consumedTriggerKeys,
+          )
+          if (triggerResult != null) {
+            seq = triggerSeq
+            events += triggerResult.first
+            programs += triggerResult.second
+          }
+        }
+      }
+    }
+
+    return LifeDamageResult(events, programs, seq)
+  }
+
+  private fun buildTriggerRequest(
+    state: GameState,
+    lifeCardId: CardInstanceId,
+    controllerId: PlayerId,
+    triggerEvent: GameEvent,
+    seq: Long,
+    consumedKeys: MutableSet<AbilityUsageKey>,
+  ): Pair<GameEvent, ProgramRequest>? {
+    val card = state.cards[lifeCardId] ?: return null
+    val def = cardCatalog.get(card.definitionId) ?: return null
+    val triggerAbility = def.abilities.filterIsInstance<ActivatedAbilityDefinition>()
+      .firstOrNull { it.timing == ActivationTiming.ON_TRIGGER } ?: return null
+    if (triggerAbility.cost !is Cost.NoCost) return null
+
+    if (triggerAbility.usageLimit == UsageLimit.ONCE_PER_TURN) {
+      val key = AbilityUsageKey(card.objectId, triggerAbility.id, state.turn?.number ?: 0)
+      if (key in consumedKeys) return null
+      if ((state.abilityUsage[key] ?: 0) >= 1) return null
+      consumedKeys.add(key)
+    }
+
+    val activationEvent = GameEvent(
       id = EventId("${state.id.value}:$seq"),
       sequence = seq,
-      type = GameEventType.BATTLE_ENDED,
-      sourceCardId = battle.attackerId,
-      payload = GameEventPayload.BattleEndedPayload(
-        attackerId = battle.attackerId,
-        finalTarget = battle.currentTarget,
-        outcome = outcome,
+      type = GameEventType.EFFECT_ACTIVATED,
+      sourceCardId = lifeCardId,
+      payload = GameEventPayload.EffectActivatedPayload(
+        effectId = EffectId("${state.id.value}:trigger:$seq"),
+        sourceCardId = lifeCardId,
+        abilityId = triggerAbility.id,
       ),
       visibility = EventVisibility.PUBLIC,
     )
-    return GameTransition(listOf(event), emptyList())
+
+    val request = ProgramRequest(
+      executionId = ExecutionId(activationEvent.id.value),
+      program = triggerAbility.program,
+      context = EffectContext(
+        gameId = state.id,
+        controllerId = controllerId,
+        sourceCardId = lifeCardId,
+        abilityId = triggerAbility.id,
+        triggeringEvent = triggerEvent,
+      ),
+    )
+
+    return activationEvent to request
   }
+
+  private fun evaluateDamagePrevention(
+    state: GameState,
+    playerId: PlayerId,
+    evaluator: RulesEngine,
+    continuous: ContinuousEffectProcessor,
+  ): Int {
+    var total = 0
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.DamagePreventionModifier ?: continue
+      if (modifier.playerId != playerId) continue
+      if (!continuous.isEffectActive(state, effect)) continue
+      val ctx = EffectContext(
+        gameId = state.id,
+        controllerId = effect.controllerId,
+        sourceCardId = effect.sourceCardId,
+        abilityId = effect.sourceAbilityId,
+        triggeringEvent = null,
+      )
+      val result = evaluator.evaluateValue(modifier.amount, state, ctx, emptyMap())
+      if (result is EvaluationResult.Success) {
+        val value = (result.value as? StoredValue.IntegerValue)?.value ?: 0
+        total += value
+      }
+    }
+    return total
+  }
+
+  private fun endBattleOnly(
+    state: GameState,
+    battle: BattleState,
+    outcome: BattleOutcome,
+  ): GameTransition {
+    val seq = state.lastEventSequence + 1
+    return GameTransition(listOf(endBattleEvent(state, battle, outcome, seq)), emptyList())
+  }
+
+  private fun endBattleEvent(
+    state: GameState,
+    battle: BattleState,
+    outcome: BattleOutcome,
+    seq: Long,
+  ): GameEvent = GameEvent(
+    id = EventId("${state.id.value}:$seq"),
+    sequence = seq,
+    type = GameEventType.BATTLE_ENDED,
+    sourceCardId = battle.attackerId,
+    payload = GameEventPayload.BattleEndedPayload(
+      attackerId = battle.attackerId,
+      finalTarget = battle.currentTarget,
+      outcome = outcome,
+    ),
+    visibility = EventVisibility.PUBLIC,
+  )
+
+  private data class LifeDamageResult(
+    val events: List<GameEvent>,
+    val programs: List<ProgramRequest>,
+    val lastSeq: Long,
+  )
 }
 
 internal class RuleProcessor {
