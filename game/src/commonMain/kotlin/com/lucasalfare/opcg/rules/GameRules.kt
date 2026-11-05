@@ -1071,6 +1071,8 @@ internal class EffectScheduler(
   private val ignoredTriggerTypes = setOf(
     GameEventType.PROGRAM_FRAME_CHANGED,
     GameEventType.PENDING_CHOICE_CHANGED,
+    GameEventType.MODIFIER_ADDED,
+    GameEventType.MODIFIER_EXPIRED,
   )
 
   fun validateActivate(
@@ -1304,11 +1306,69 @@ internal class EffectScheduler(
 
   private fun grantedAutoAbilities(state: GameState, cardId: CardInstanceId): List<AutoAbilityDefinition> {
     return state.activeEffects.mapNotNull { effect ->
+      if (!isActive(state, effect)) return@mapNotNull null
       if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
       val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
       if (!modifier.add) return@mapNotNull null
       modifier.ability as? AutoAbilityDefinition
     }
+  }
+
+  private fun grantedActivatedAbilities(state: GameState, cardId: CardInstanceId): List<ActivatedAbilityDefinition> {
+    return state.activeEffects.mapNotNull { effect ->
+      if (!isActive(state, effect)) return@mapNotNull null
+      if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
+      val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
+      if (!modifier.add) return@mapNotNull null
+      modifier.ability as? ActivatedAbilityDefinition
+    }
+  }
+
+  private fun isActive(state: GameState, effect: ActiveEffect): Boolean {
+    return when (val duration = effect.duration) {
+      is Duration.Permanent -> true
+      is Duration.DuringBattle -> state.battle != null
+      is Duration.WhileSourceValid -> sourceZoneMatches(state, effect.sourceCardId)
+      is Duration.WhileCondition -> conditionHolds(state, effect, duration.condition)
+      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent -> true
+    }
+  }
+
+  private fun sourceZoneMatches(state: GameState, sourceCardId: CardInstanceId?): Boolean {
+    if (sourceCardId == null) return false
+    val instance = state.cards[sourceCardId] ?: return false
+    val definition = cardCatalog.get(instance.definitionId) ?: return true
+    val zone = zoneOf(state, sourceCardId) ?: return false
+    return when (definition.category) {
+      CardCategory.LEADER -> zone == ZoneType.LEADER
+      CardCategory.CHARACTER -> zone == ZoneType.CHARACTER
+      CardCategory.STAGE -> zone == ZoneType.STAGE
+      CardCategory.EVENT -> zone == ZoneType.TRASH || zone == ZoneType.HAND
+      CardCategory.DON -> zone == ZoneType.COST || zone == ZoneType.DON_DECK || zone == ZoneType.ATTACHED_DON
+    }
+  }
+
+  private fun conditionHolds(state: GameState, effect: ActiveEffect, condition: Condition): Boolean {
+    val ctx = EffectContext(
+      gameId = state.id,
+      controllerId = effect.controllerId,
+      sourceCardId = effect.sourceCardId,
+      abilityId = effect.sourceAbilityId,
+      triggeringEvent = null,
+    )
+    return when (val result = evaluator.evaluateCondition(condition, state, ctx, emptyMap())) {
+      is EvaluationResult.Failed -> false
+      is EvaluationResult.Success -> result.value
+    }
+  }
+
+  private val evaluator: RulesEngine
+    get() = currentEvaluator ?: error("EffectScheduler evaluator not initialized")
+
+  private var currentEvaluator: RulesEngine? = null
+
+  fun bindEvaluator(evaluator: RulesEngine) {
+    currentEvaluator = evaluator
   }
 
   private fun orderScheduled(state: GameState, items: List<ScheduledAuto>): List<ScheduledAuto> {
@@ -1560,15 +1620,6 @@ internal class EffectScheduler(
     if (costPayment == null) violations += RuleViolation("COST_UNPAID", "Unable to pay ability cost")
     if (violations.isNotEmpty() || costPayment == null) return AbilityResolveResult.Invalid(violations)
     return AbilityResolveResult.Ok(sourceCardId, ability, playerId, card.objectId, costPayment)
-  }
-
-  private fun grantedActivatedAbilities(state: GameState, cardId: CardInstanceId): List<ActivatedAbilityDefinition> {
-    return state.activeEffects.mapNotNull { effect ->
-      if (cardId !in effect.targetCardIds && effect.targetCardIds.isNotEmpty()) return@mapNotNull null
-      val modifier = effect.modifier as? Modifier.AbilityModifier ?: return@mapNotNull null
-      if (!modifier.add) return@mapNotNull null
-      modifier.ability as? ActivatedAbilityDefinition
-    }
   }
 
   private fun findActivatedAbilities(

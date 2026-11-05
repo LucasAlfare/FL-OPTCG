@@ -562,8 +562,12 @@ internal class LoopProcessor {
     val normalized = state.copy(
       lastEventSequence = 0,
       abilityUsage = emptyMap(),
-      activeEffects = state.activeEffects.map { it.copy(timestampSequence = 0) }.sortedBy { it.id.value },
-      activePrograms = state.activePrograms.map { it.copy(stepCount = 0) }.sortedBy { it.id.value },
+      activeEffects = state.activeEffects
+        .map { it.copy(timestampSequence = 0) }
+        .sortedBy { it.id.value },
+      activePrograms = state.activePrograms
+        .map { it.copy(stepCount = 0) }
+        .sortedBy { it.id.value },
       randomState = state.randomState.copy(drawCount = 0),
     )
     return GameSerialization.encodeState(normalized)
@@ -834,7 +838,8 @@ internal class ContinuousEffectProcessor(
   }
 
   private fun matchesPattern(pattern: GameEventPattern, event: GameEvent): Boolean {
-    return !(pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes)
+    if (pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes) return false
+    return true
   }
 
   private fun constantValue(expr: ValueExpr): Int {

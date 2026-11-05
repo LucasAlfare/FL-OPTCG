@@ -10,8 +10,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val damageProcessor = DamageProcessor(cardCatalog)
   private val costProcessor = CostProcessor()
   private val effectScheduler = EffectScheduler(cardCatalog)
-  private val continuousEffectProcessor =
-    ContinuousEffectProcessor(cardCatalog, this) // escrevi esse this manualmente...
+  private val continuousEffectProcessor = ContinuousEffectProcessor(cardCatalog, this)
   private val replacementProcessor = ReplacementProcessor()
   private val ruleProcessor = RuleProcessor()
   private val informationManager = InformationManager()
@@ -20,6 +19,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val gameFactory = GameFactory(cardCatalog)
   private val zoneInstructionExecutor = ZoneInstructionExecutor()
   private val donInstructionExecutor = DonInstructionExecutor()
+
+  init {
+    effectScheduler.bindEvaluator(this)
+  }
 
   fun validate(state: GameState, command: GameCommand): ValidationResult {
     if (state.status == GameStatus.FINISHED) {
@@ -93,8 +96,26 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   fun advanceBattleStep(state: GameState): GameTransition =
     battleResolver.advanceStep(state, continuousEffectProcessor, damageProcessor, this)
 
-  fun processEvents(state: GameState, events: List<GameEvent>): GameTransition =
-    effectScheduler.processEvents(state, events, this)
+  fun processEvents(state: GameState, events: List<GameEvent>): GameTransition {
+    if (events.isEmpty()) return GameTransition(emptyList(), emptyList())
+    val expired = continuousEffectProcessor.effectsToExpire(state, events)
+    val expirationEvents = expired.mapIndexed { index, effect ->
+      GameEvent(
+        id = EventId("${state.id.value}:${state.lastEventSequence + 1 + index}"),
+        sequence = state.lastEventSequence + 1 + index,
+        type = GameEventType.MODIFIER_EXPIRED,
+        sourceCardId = effect.sourceCardId,
+        payload = GameEventPayload.ModifierExpiredPayload(effect.id),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    val transition = effectScheduler.processEvents(state, events, this)
+    return GameTransition(
+      events = expirationEvents + transition.events,
+      programsToRun = transition.programsToRun,
+      choiceToResume = transition.choiceToResume,
+    )
+  }
 
   fun processAutomaticRules(state: GameState): GameTransition = ruleProcessor.processRules(state)
 
