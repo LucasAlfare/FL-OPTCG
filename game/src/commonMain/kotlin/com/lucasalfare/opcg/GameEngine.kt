@@ -228,6 +228,11 @@ class GameStateReducer : EventApplier {
         }
         state.copy(pendingChoices = choices)
       }
+
+      is GameEventPayload.InitialEffectsProgressPayload -> {
+        val setup = state.setup ?: return state
+        state.copy(setup = setup.copy(initialEffectsProgress = payload.progress))
+      }
     }
   }
 
@@ -714,18 +719,49 @@ class GameEngine private constructor(
       return autoResult
     }
 
-    if (command is ResolveMulliganCommand) {
-      checkMulligansComplete(transactionEvents)
-    }
+    continueSetupIfNeeded(transactionEvents)
 
     appendTransaction(command, transactionEvents)
 
+    val extraEvents = if (command is ResolveMulliganCommand) {
+      checkMulligansComplete()
+    } else {
+      emptyList()
+    }
+
     return if (state.pendingChoices.isNotEmpty()) {
       val blocking = state.pendingChoices.first()
-      CommandResult.Suspended(blocking.id, transactionEvents)
+      CommandResult.Suspended(blocking.id, transactionEvents + extraEvents)
     } else {
-      CommandResult.Completed(transactionEvents, state.lastEventSequence)
+      CommandResult.Completed(transactionEvents + extraEvents, state.lastEventSequence)
     }
+  }
+
+  private fun continueSetupIfNeeded(accumulated: MutableList<GameEvent>) {
+    if (state.status == GameStatus.FINISHED) return
+    val setup = state.setup ?: return
+    if (setup.step != GameSetupStep.INITIAL_EFFECTS) return
+    if (state.pendingChoices.isNotEmpty()) return
+    if (state.activePrograms.isNotEmpty()) return
+
+    val done = processInitialLeaderEffects(accumulated)
+    if (done) {
+      advanceToOpeningHand(accumulated)
+    }
+  }
+
+  private fun checkMulligansComplete(): List<GameEvent> {
+    val setup = state.setup ?: return emptyList()
+    if (setup.step != GameSetupStep.MULLIGAN || setup.pendingMulliganPlayers.isNotEmpty()) {
+      return emptyList()
+    }
+
+    val setupEvents = mutableListOf<GameEvent>()
+    advanceToLife(setupEvents)
+    if (setupEvents.isNotEmpty()) {
+      history.append(buildEntry(null, setupEvents))
+    }
+    return setupEvents
   }
 
   fun snapshot(): GameSnapshot = history.createSnapshot(state, history.log!!.entries.lastOrNull()?.sequence ?: 0L)
@@ -778,45 +814,77 @@ class GameEngine private constructor(
     recordAutoEntry(setupEvents)
   }
 
-  private fun processInitialLeaderEffects(accumulated: MutableList<GameEvent>): Unit? {
+  private fun processInitialLeaderEffects(accumulated: MutableList<GameEvent>): Boolean {
+    if (state.setup?.step != GameSetupStep.INITIAL_EFFECTS) return true
+
     val chooser = state.chooserPlayerId
-    val other = state.playerOrder.firstOrNull { it != chooser } ?: return null
+    val other = state.playerOrder.firstOrNull { it != chooser } ?: return true
+    val players = listOf(chooser, other)
 
-    for (playerId in listOf(chooser, other)) {
-      val player = state.players[playerId] ?: continue
-      val leaderCardId = player.leader.cards.firstOrNull() ?: continue
-      val leaderDef = cardCatalog.get(state.cards[leaderCardId]?.definitionId ?: continue) ?: continue
+    var progress = state.setup?.initialEffectsProgress ?: InitialEffectsProgress(0, 0)
 
-      for (ability in leaderDef.abilities) {
-        if (ability !is ActivatedAbilityDefinition) continue
-        if (ability.timing != ActivationTiming.AT_GAME_START) continue
+    while (progress.playerIndex < players.size) {
+      val playerId = players[progress.playerIndex]
+      val player = state.players[playerId]
 
-        val command = ActivateAbilityCommand(playerId, leaderCardId, ability.id)
-        val transition = rulesEngine.process(state, command)
-        if (transition.events.isNotEmpty()) {
-          state = reducer.apply(state, transition.events)
-          accumulated += transition.events
-        }
-        for (request in transition.programsToRun) {
-          val vmResult = runVmStart(request, accumulated)
-          if (vmResult != null) {
-            recordAutoEntry(accumulated)
-            return Unit
-          }
-        }
-        val autoResult = drainAutomaticWork(accumulated)
-        if (autoResult != null) {
-          recordAutoEntry(accumulated)
-          return Unit
-        }
-        if (state.pendingChoices.isNotEmpty()) {
-          recordAutoEntry(accumulated)
-          return Unit
-        }
+      val leaderCardId = player?.leader?.cards?.firstOrNull()
+      val leaderInstance = leaderCardId?.let { state.cards[it] }
+      val leaderDef = leaderInstance?.let { cardCatalog.get(it.definitionId) }
+
+      val atGameStartAbilities = leaderDef?.abilities?.filterIsInstance<ActivatedAbilityDefinition>()
+        ?.filter { it.timing == ActivationTiming.AT_GAME_START } ?: emptyList()
+
+      if (progress.abilityIndex >= atGameStartAbilities.size || leaderCardId == null) {
+        progress = InitialEffectsProgress(progress.playerIndex + 1, 0)
+        continue
       }
+
+      val ability = atGameStartAbilities[progress.abilityIndex]
+      val next = if (progress.abilityIndex + 1 < atGameStartAbilities.size) {
+        InitialEffectsProgress(progress.playerIndex, progress.abilityIndex + 1)
+      } else {
+        InitialEffectsProgress(progress.playerIndex + 1, 0)
+      }
+
+      advanceInitialEffectsProgress(next, accumulated)
+
+      val command = ActivateAbilityCommand(playerId, leaderCardId, ability.id)
+      val transition = rulesEngine.process(state, command)
+      if (transition.events.isNotEmpty()) {
+        state = reducer.apply(state, transition.events)
+        accumulated += transition.events
+      }
+
+      for (request in transition.programsToRun) {
+        val vmResult = runVmStart(request, accumulated)
+        if (vmResult != null) return false
+      }
+
+      val autoResult = drainAutomaticWork(accumulated)
+      if (autoResult != null) return false
+      if (state.pendingChoices.isNotEmpty()) return false
+
+      progress = next
     }
 
-    return null
+    return true
+  }
+
+  private fun advanceInitialEffectsProgress(
+    progress: InitialEffectsProgress,
+    accumulated: MutableList<GameEvent>,
+  ) {
+    val seq = state.lastEventSequence + 1
+    val event = GameEvent(
+      id = EventId("${state.id.value}:$seq"),
+      sequence = seq,
+      type = GameEventType.INITIAL_EFFECTS_PROGRESS_CHANGED,
+      sourceCardId = null,
+      payload = GameEventPayload.InitialEffectsProgressPayload(progress),
+      visibility = EventVisibility.INTERNAL,
+    )
+    state = reducer.apply(state, listOf(event))
+    accumulated += event
   }
 
   private fun advanceToOpeningHand(accumulated: MutableList<GameEvent>) {
@@ -1147,18 +1215,6 @@ class GameEngine private constructor(
       is SubmitChoiceCommand -> true
       is ConcedeCommand -> true
       else -> false
-    }
-  }
-
-  private fun checkMulligansComplete(accumulated: MutableList<GameEvent>) {
-    val setup = state.setup ?: return
-    if (setup.step == GameSetupStep.MULLIGAN && setup.pendingMulliganPlayers.isEmpty()) {
-      val before = accumulated.size
-      advanceToLife(accumulated)
-      val newEvents = accumulated.subList(before, accumulated.size).toList()
-      if (newEvents.isNotEmpty()) {
-        history.append(buildEntry(null, newEvents))
-      }
     }
   }
 
