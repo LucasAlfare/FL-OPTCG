@@ -459,6 +459,19 @@ class CardProgramValidator {
         }
         issues
       }
+
+      is Condition.CardPropertyLiteralComparison -> {
+        val issues = mutableListOf<ProgramValidationIssue>()
+        issues += validateCardReference(condition.card, path)
+        if (condition.operator != ComparisonOperator.EQUAL && condition.operator != ComparisonOperator.NOT_EQUAL) {
+          issues += ProgramValidationIssue(
+            "INVALID_PROPERTY_OPERATOR",
+            "Card property literal comparison supports only EQUAL and NOT_EQUAL",
+            path,
+          )
+        }
+        issues
+      }
     }
   }
 

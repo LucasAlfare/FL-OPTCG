@@ -82,6 +82,14 @@ sealed class Condition {
     val operator: ComparisonOperator,
     val rightCard: CardReference,
   ) : Condition()
+
+  @Serializable
+  data class CardPropertyLiteralComparison(
+    val card: CardReference,
+    val property: CardProperty,
+    val operator: ComparisonOperator,
+    val value: PropertyValue,
+  ) : Condition()
 }
 
 @Serializable

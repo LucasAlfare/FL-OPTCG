@@ -826,6 +826,8 @@ internal class ContinuousEffectProcessor(
 
             CardProperty.KEYWORDS -> if (modifier.value is PropertyValue.KeywordSetValue) keywords =
               modifier.value.value.toMutableSet()
+
+            CardProperty.CATEGORY -> Unit
           }
         }
 

@@ -143,7 +143,7 @@ sealed class BattleTarget {
 data class RandomState(val algorithmId: String, val seed: ULong, val state: ULong, val drawCount: Long)
 
 @Serializable
-enum class CardProperty { NAME, COLOR, TYPE, ATTRIBUTE, KEYWORDS }
+enum class CardProperty { NAME, COLOR, TYPE, ATTRIBUTE, KEYWORDS, CATEGORY }
 
 @Serializable
 sealed class PropertyValue {
@@ -161,6 +161,9 @@ sealed class PropertyValue {
 
   @Serializable
   data class KeywordSetValue(val value: Set<KeywordEffect>) : PropertyValue()
+
+  @Serializable
+  data class CategoryValue(val value: CardCategory) : PropertyValue()
 }
 
 @Serializable

@@ -309,7 +309,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         var seq = state.lastEventSequence
         for (cardId in cardIds) {
           for (property in instruction.properties) {
-            val value = propertyValueFrom(sourceChars, property) ?: continue
+            val value = propertyValueFrom(state, refId, sourceChars, property) ?: continue
             seq += 1
             effects += activeEffect(
               state,
@@ -1074,14 +1074,22 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     }
   }
 
-  private fun propertyValueFrom(chars: EffectiveCharacteristics, property: CardProperty): PropertyValue? =
-    when (property) {
-      CardProperty.NAME -> PropertyValue.StringValue(chars.name)
-      CardProperty.COLOR -> PropertyValue.ColorSetValue(chars.colors)
-      CardProperty.TYPE -> PropertyValue.TypeSetValue(chars.types)
-      CardProperty.ATTRIBUTE -> PropertyValue.AttributeSetValue(chars.attributes)
-      CardProperty.KEYWORDS -> PropertyValue.KeywordSetValue(chars.keywords)
+  private fun propertyValueFrom(
+    state: GameState,
+    cardId: CardInstanceId,
+    chars: EffectiveCharacteristics,
+    property: CardProperty,
+  ): PropertyValue? = when (property) {
+    CardProperty.NAME -> PropertyValue.StringValue(chars.name)
+    CardProperty.COLOR -> PropertyValue.ColorSetValue(chars.colors)
+    CardProperty.TYPE -> PropertyValue.TypeSetValue(chars.types)
+    CardProperty.ATTRIBUTE -> PropertyValue.AttributeSetValue(chars.attributes)
+    CardProperty.KEYWORDS -> PropertyValue.KeywordSetValue(chars.keywords)
+    CardProperty.CATEGORY -> {
+      val definition = state.cards[cardId]?.let { cardCatalog.get(it.definitionId) } ?: return null
+      PropertyValue.CategoryValue(definition.category)
     }
+  }
 
   @Suppress("SameParameterValue")
   private fun failExec(code: String, message: String, pointer: Int): InstructionExecutionResult.Failed =
@@ -1253,6 +1261,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is Condition.CardPropertyComparison -> evaluateCardPropertyComparison(
         state, condition, context, variables, candidateCardId,
       )
+
+      is Condition.CardPropertyLiteralComparison -> evaluateCardPropertyLiteralComparison(
+        state, condition, context, variables, candidateCardId,
+      )
     }
   }
 
@@ -1283,6 +1295,30 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is EvaluationResult.Success -> r.value
     }
     val equal = leftValue == rightValue
+    return EvaluationResult.Success(if (condition.operator == ComparisonOperator.EQUAL) equal else !equal)
+  }
+
+  private fun evaluateCardPropertyLiteralComparison(
+    state: GameState,
+    condition: Condition.CardPropertyLiteralComparison,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    candidateCardId: CardInstanceId?,
+  ): EvaluationResult<Boolean> {
+    if (condition.operator != ComparisonOperator.EQUAL && condition.operator != ComparisonOperator.NOT_EQUAL) {
+      return evalFail(
+        "INVALID_OPERATOR", "Card property literal comparison supports only EQUAL and NOT_EQUAL"
+      )
+    }
+    val cardId = when (val r = resolveSingleCard(state, condition.card, variables, context, candidateCardId)) {
+      is EvaluationResult.Failed -> return r
+      is EvaluationResult.Success -> r.value
+    }
+    val current = when (val r = effectiveProperty(state, cardId, condition.property)) {
+      is EvaluationResult.Failed -> return r
+      is EvaluationResult.Success -> r.value
+    }
+    val equal = current == condition.value
     return EvaluationResult.Success(if (condition.operator == ComparisonOperator.EQUAL) equal else !equal)
   }
 
@@ -1337,7 +1373,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     val characteristics = effectiveCharacteristics(state, cardId) ?: return evalFail(
       "MISSING_CHARACTERISTIC", "Effective characteristics unavailable for card",
     )
-    val value = propertyValueFrom(characteristics, property) ?: return evalFail(
+    val value = propertyValueFrom(state, cardId, characteristics, property) ?: return evalFail(
       "MISSING_PROPERTY", "Property $property unavailable",
     )
     return EvaluationResult.Success(value)
