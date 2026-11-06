@@ -4,6 +4,8 @@ package com.lucasalfare.opcg
 
 import kotlinx.serialization.Serializable
 
+val SOURCE_CARD: VariableId = VariableId("SOURCE_CARD")
+
 @Serializable
 sealed interface Instruction
 
@@ -43,6 +45,12 @@ sealed class ValueExpr {
 
   @Serializable
   data class CurrentCardValue(val characteristic: NumericCharacteristic) : ValueExpr()
+
+  @Serializable
+  data class CardCharacteristic(
+    val cardReference: CardReference,
+    val characteristic: NumericCharacteristic,
+  ) : ValueExpr()
 }
 
 @Serializable

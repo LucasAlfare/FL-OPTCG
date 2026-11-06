@@ -119,7 +119,7 @@ enum class ActivationTiming {
 enum class UsageLimit { UNLIMITED, ONCE_PER_TURN }
 
 @Serializable
-enum class NumericCharacteristic { POWER, BASE_POWER, COST, BASE_COST, LIFE, COUNTER }
+enum class NumericCharacteristic { POWER, BASE_POWER, COST, BASE_COST, LIFE, COUNTER, ATTACHED_DON_COUNT }
 
 @Serializable
 enum class NumericOperation { ADD, SUBTRACT, SET }
@@ -409,6 +409,7 @@ data class EffectiveCharacteristics(
   val name: String, val colors: Set<CardColor>, val types: Set<String>,
   val attributes: Set<CardAttribute>, val cost: Int?, val power: Int?,
   val life: Int?, val counter: Int?, val keywords: Set<KeywordEffect>,
+  val attachedDonCount: Int,
 )
 
 interface CardCatalog {

@@ -270,7 +270,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         val cardIds = resolveSourceCards(instruction.source, variables) ?: return failExec(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
-        val refId = resolveCardReference(instruction.reference, variables) ?: return failExec(
+        val refId = resolveCardReference(instruction.reference, variables, context) ?: return failExec(
           "INVALID_REFERENCE", "CopyCardProperties reference unresolved", 0
         )
         val sourceChars = continuousEffectProcessor.effectiveCharacteristics(state, refId) ?: return failExec(
@@ -342,7 +342,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         val cardIds = resolveSourceCards(instruction.source, variables) ?: return failExec(
           "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0
         )
-        val refId = resolveCardReference(instruction.reference, variables) ?: return failExec(
+        val refId = resolveCardReference(instruction.reference, variables, context) ?: return failExec(
           "INVALID_REFERENCE", "CopyAbilities reference unresolved", 0
         )
         val def = state.cards[refId]?.let { cardCatalog.get(it.definitionId) } ?: return failExec(
@@ -961,9 +961,14 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     }
   }
 
-  private fun resolveCardReference(reference: CardReference, variables: Map<VariableId, StoredValue>): CardInstanceId? {
+  private fun resolveCardReference(
+    reference: CardReference,
+    variables: Map<VariableId, StoredValue>,
+    context: EffectContext,
+  ): CardInstanceId? {
     reference.instanceId?.let { return it }
     val variableId = reference.variableId ?: return null
+    if (variableId == SOURCE_CARD) return context.sourceCardId
     return when (val value = variables[variableId]) {
       is StoredValue.CardValue -> value.value
       is StoredValue.CardIdsValue -> value.value.singleOrNull()
@@ -1053,6 +1058,18 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
           "ARITHMETIC_ERROR", "Invalid arithmetic operation"
         )
         EvaluationResult.Success(StoredValue.IntegerValue(result))
+      }
+
+      is ValueExpr.CardCharacteristic -> {
+        val cardId = resolveCardReference(expression.cardReference, variables, context) ?: return evalFail(
+          "MISSING_CARD_REFERENCE",
+          "Card reference did not resolve to exactly one card",
+        )
+        val value = readCharacteristic(state, cardId, expression.characteristic) ?: return evalFail(
+          "MISSING_CHARACTERISTIC",
+          "Characteristic ${expression.characteristic} unavailable for card ${cardId.value}",
+        )
+        EvaluationResult.Success(StoredValue.IntegerValue(value))
       }
     }
   }
@@ -1157,6 +1174,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       NumericCharacteristic.BASE_COST -> effective.cost
       NumericCharacteristic.LIFE -> effective.life
       NumericCharacteristic.COUNTER -> effective.counter
+      NumericCharacteristic.ATTACHED_DON_COUNT -> effective.attachedDonCount
     }
   }
 

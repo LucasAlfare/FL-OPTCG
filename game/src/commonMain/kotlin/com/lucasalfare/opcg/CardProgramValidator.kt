@@ -266,7 +266,35 @@ class CardProgramValidator {
         }
         issues
       }
+
+      is ValueExpr.CardCharacteristic -> validateCardReference(expr.cardReference, path)
     }
+  }
+
+  private fun validateCardReference(
+    reference: CardReference,
+    path: List<Int>,
+  ): List<ProgramValidationIssue> {
+    val issues = mutableListOf<ProgramValidationIssue>()
+    val hasInstance = reference.instanceId != null
+    val hasVariable = reference.variableId != null
+    if (hasInstance == hasVariable) {
+      issues += ProgramValidationIssue(
+        "INVALID_CARD_REFERENCE",
+        "CardReference must have exactly one of instanceId or variableId",
+        path,
+      )
+    }
+    reference.variableId?.let { variableId ->
+      if (variableId.value.isBlank()) {
+        issues += ProgramValidationIssue(
+          "INVALID_VARIABLE_ID",
+          "CardReference variableId must not be blank",
+          path,
+        )
+      }
+    }
+    return issues
   }
 
   private fun validateCondition(condition: Condition, path: List<Int>): List<ProgramValidationIssue> {

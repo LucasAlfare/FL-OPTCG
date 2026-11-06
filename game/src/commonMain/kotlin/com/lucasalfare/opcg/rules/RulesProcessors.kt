@@ -793,6 +793,8 @@ internal class ContinuousEffectProcessor(
             NumericCharacteristic.COUNTER -> {
               counter = applyNumeric(counter, modifier.operation, constantValue(modifier.value))
             }
+
+            NumericCharacteristic.ATTACHED_DON_COUNT -> Unit
           }
         }
 
@@ -828,12 +830,12 @@ internal class ContinuousEffectProcessor(
     val cost = (baseCost ?: 0) + costDelta
 
     effectiveController(state, cardId) ?: instance.controllerId
+    val attachedDonCount = state.donAttachments.firstOrNull { it.hostCardId == cardId }?.donCardIds?.size ?: 0
     if (definition.category in setOf(
         CardCategory.LEADER, CardCategory.CHARACTER
       )
     ) {
-      val attached = state.donAttachments.firstOrNull { it.hostCardId == cardId }?.donCardIds?.size ?: 0
-      power += attached * 1000
+      power += attachedDonCount * 1000
     }
 
     return EffectiveCharacteristics(
@@ -846,6 +848,7 @@ internal class ContinuousEffectProcessor(
       life = life,
       counter = counter,
       keywords = keywords,
+      attachedDonCount = attachedDonCount,
     )
   }
 
@@ -1143,9 +1146,9 @@ internal class ReplacementProcessor(
     }
 
     return candidates.sortedWith(
-        compareBy<Pair<ActiveEffect, Int>> { it.second }.thenBy { it.first.timestampSequence }
-          .thenBy { it.first.id.value },
-      ).map { it.first }
+      compareBy<Pair<ActiveEffect, Int>> { it.second }.thenBy { it.first.timestampSequence }
+        .thenBy { it.first.id.value },
+    ).map { it.first }
   }
 
   fun buildActivation(
