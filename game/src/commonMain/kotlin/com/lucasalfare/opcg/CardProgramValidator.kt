@@ -136,6 +136,7 @@ class CardProgramValidator {
         issues
       }
 
+      is ReturnCardsToOwnerHand -> emptyList()
       is CountCards -> validateSelector(instruction.selector, path)
       is LookAtTop -> {
         val allowed = setOf(ZoneType.DECK, ZoneType.LIFE, ZoneType.DON_DECK)

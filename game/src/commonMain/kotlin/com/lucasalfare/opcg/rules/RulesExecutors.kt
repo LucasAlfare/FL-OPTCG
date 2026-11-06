@@ -153,6 +153,70 @@ internal class ZoneInstructionExecutor {
     return InstructionExecutionResult.Completed(null, events)
   }
 
+  fun returnCardsToOwnerHand(
+    state: GameState,
+    instruction: ReturnCardsToOwnerHand,
+    variables: Map<VariableId, StoredValue>,
+    informationManager: InformationManager,
+  ): InstructionExecutionResult {
+    val cardIds = when (val source = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> source.value
+      is StoredValue.CardValue -> listOf(source.value)
+      null -> return fail("MISSING_VARIABLE", "ReturnCardsToOwnerHand source missing")
+      else -> return fail("INVALID_SOURCE", "ReturnCardsToOwnerHand source must be cards")
+    }
+    if (cardIds.toSet().size != cardIds.size) {
+      return fail("DUPLICATE_CARDS", "ReturnCardsToOwnerHand source contains duplicate cards")
+    }
+
+    val returns = cardIds.map { cardId ->
+      val instance = state.cards[cardId] ?: return fail("UNKNOWN_CARD", "Card $cardId not found")
+      val (fromPlayerId, fromZone) = locateCard(state, cardId) ?: return fail(
+        "CARD_NOT_LOCATED", "Card $cardId is not in any zone"
+      )
+      if (fromZone == ZoneType.DON_DECK || fromZone == ZoneType.ATTACHED_DON) {
+        return fail("INVALID_SOURCE_ZONE", "Card $cardId in $fromZone cannot return to hand")
+      }
+      HandReturn(cardId, instance.ownerId, fromPlayerId, fromZone)
+    }
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (entry in returns) {
+      if (informationManager.needsTemporaryReveal(entry.fromZone, ZoneType.HAND)) {
+        seq += 1
+        events += informationManager.revealEvent(
+          state = state,
+          cardIds = listOf(entry.cardId),
+          cardVisibility = CardVisibility.PLAYERS(setOf(entry.ownerId)),
+          eventVisibility = EventVisibility.PRIVATE_TO_PLAYER(entry.ownerId),
+          sequence = seq,
+        )
+      }
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = entry.cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = entry.cardId,
+          fromPlayerId = entry.fromPlayerId,
+          fromZone = entry.fromZone,
+          toPlayerId = entry.ownerId,
+          toZone = ZoneType.HAND,
+          destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_DOWN,
+          visibility = CardVisibility.OWNER_ONLY,
+        ),
+        visibility = EventVisibility.PRIVATE_TO_PLAYER(entry.ownerId),
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
   fun trashFromHand(
     state: GameState,
     instruction: TrashFromHand,
@@ -296,6 +360,13 @@ internal class ZoneInstructionExecutor {
     }
     return InstructionExecutionResult.Completed(null, events)
   }
+
+  private data class HandReturn(
+    val cardId: CardInstanceId,
+    val ownerId: PlayerId,
+    val fromPlayerId: PlayerId,
+    val fromZone: ZoneType,
+  )
 
   private fun sourceCards(source: VariableId, variables: Map<VariableId, StoredValue>): List<CardInstanceId>? {
     return when (val value = variables[source]) {

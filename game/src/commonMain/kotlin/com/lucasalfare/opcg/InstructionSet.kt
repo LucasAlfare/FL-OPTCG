@@ -168,6 +168,12 @@ data class SelectFromVariable(
 ) : Instruction
 
 @Serializable
+@SerialName("RETURN_CARDS_TO_OWNER_HAND")
+data class ReturnCardsToOwnerHand(
+  val source: VariableId,
+) : Instruction
+
+@Serializable
 data class CountCards(
   val selector: CardSelector,
   val destination: VariableId,

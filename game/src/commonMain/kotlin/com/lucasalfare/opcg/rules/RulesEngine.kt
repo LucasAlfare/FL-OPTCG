@@ -485,6 +485,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         state, instruction, context, variables, this, informationManager,
       )
 
+      is ReturnCardsToOwnerHand -> zoneInstructionExecutor.returnCardsToOwnerHand(
+        state, instruction, variables, informationManager,
+      )
+
       is TrashFromHand -> zoneInstructionExecutor.trashFromHand(state, instruction, context, variables, this)
       is PlayCard -> zoneInstructionExecutor.playCard(
         state, instruction, context, variables, cardCatalog, continuousEffectProcessor, costProcessor, this,
@@ -761,10 +765,16 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
       is EvaluationResult.Success -> r.value
     }
-    val minVal = evaluateInt(instruction.minimum, state, context, variables)
-      ?: return failExec("INVALID_RANGE", "SelectFromVariable minimum must evaluate to an integer", 0)
-    val maxVal = evaluateInt(instruction.maximum, state, context, variables)
-      ?: return failExec("INVALID_RANGE", "SelectFromVariable maximum must evaluate to an integer", 0)
+    val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: return failExec(
+      "INVALID_RANGE",
+      "SelectFromVariable minimum must evaluate to an integer",
+      0
+    )
+    val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: return failExec(
+      "INVALID_RANGE",
+      "SelectFromVariable maximum must evaluate to an integer",
+      0
+    )
     if (minVal < 0 || maxVal < minVal) {
       return failExec("INVALID_RANGE", "Selection range $minVal..$maxVal is invalid", 0)
     }
