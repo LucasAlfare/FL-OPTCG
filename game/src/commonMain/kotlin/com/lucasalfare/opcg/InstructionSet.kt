@@ -120,6 +120,7 @@ data class CardReference(
 data class DonSelector(
   val zones: Set<ZoneType> = emptySet(),
   val orientation: CardOrientation? = null,
+  val source: VariableId? = null,
 )
 
 @Serializable
@@ -285,6 +286,7 @@ data class PreventDamage(
 data class AddDon(
   val playerId: PlayerId,
   val amount: ValueExpr,
+  val destination: VariableId? = null,
 ) : Instruction
 
 @Serializable

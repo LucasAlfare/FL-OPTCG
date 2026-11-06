@@ -205,11 +205,25 @@ class CardProgramValidator {
         issues
       }
 
-      is AddDon -> validateValue(instruction.amount, path)
-      is RestDon -> validateValue(instruction.amount, path)
+      is AddDon -> {
+        val issues = validateValue(instruction.amount, path).toMutableList()
+        instruction.destination?.let { issues += validateVariableId(it, path) }
+        issues
+      }
+
+      is RestDon -> {
+        val issues = validateValue(instruction.amount, path).toMutableList()
+        issues += validateDonSelector(instruction.selector, path)
+        issues
+      }
+
       is SetDonActive -> emptyList()
-      is AttachDon -> emptyList()
-      is ReturnDon -> validateValue(instruction.amount, path)
+      is AttachDon -> validateVariableId(instruction.source, path)
+      is ReturnDon -> {
+        val issues = validateValue(instruction.amount, path).toMutableList()
+        issues += validateDonSelector(instruction.selector, path)
+        issues
+      }
       is DetachDon -> validateValue(instruction.amount, path)
       is RestCards -> emptyList()
       is SetCardState -> emptyList()
@@ -306,6 +320,28 @@ class CardProgramValidator {
 
       is ValueExpr.CardCharacteristic -> validateCardReference(expr.cardReference, path)
     }
+  }
+
+  private fun validateVariableId(variableId: VariableId, path: List<Int>): List<ProgramValidationIssue> {
+    return if (variableId.value.isBlank()) {
+      listOf(ProgramValidationIssue("INVALID_VARIABLE_ID", "Variable id must not be blank", path))
+    } else {
+      emptyList()
+    }
+  }
+
+  private fun validateDonSelector(selector: DonSelector, path: List<Int>): List<ProgramValidationIssue> {
+    val issues = mutableListOf<ProgramValidationIssue>()
+    val invalidZones = selector.zones - setOf(ZoneType.COST, ZoneType.ATTACHED_DON)
+    if (invalidZones.isNotEmpty()) {
+      issues += ProgramValidationIssue(
+        "INVALID_DON_ZONE",
+        "DON selector cannot use zones $invalidZones",
+        path,
+      )
+    }
+    selector.source?.let { issues += validateVariableId(it, path) }
+    return issues
   }
 
   private fun validateCardReference(

@@ -439,6 +439,7 @@ class VirtualMachine(
     is ChooseNumber -> instruction.destination
     is OrderCards -> instruction.destination
     is CheckCondition -> instruction.destination
+    is AddDon -> instruction.destination
     else -> null
   }
 

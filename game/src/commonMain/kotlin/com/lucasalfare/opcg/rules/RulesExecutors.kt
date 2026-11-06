@@ -434,7 +434,8 @@ internal class DonInstructionExecutor {
     }.coerceAtLeast(0)
     val player = state.players[instruction.playerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
     val moved = player.donDeck.cards.take(amount)
-    if (moved.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
+    val identities = if (instruction.destination == null) null else StoredValue.CardIdsValue(moved)
+    if (moved.isEmpty()) return InstructionExecutionResult.Completed(identities, emptyList())
     val events = mutableListOf<GameEvent>()
     var seq = state.lastEventSequence
     seq += 1
@@ -468,7 +469,7 @@ internal class DonInstructionExecutor {
         visibility = EventVisibility.PUBLIC,
       )
     }
-    return InstructionExecutionResult.Completed(null, events)
+    return InstructionExecutionResult.Completed(identities, events)
   }
 
   fun restDon(
@@ -504,9 +505,13 @@ internal class DonInstructionExecutor {
         .filter { id -> state.cards[id]?.ownerId == instruction.playerId }
     }
 
+    val listed = when (val r = listedDonIds(state, instruction.selector.source, variables)) {
+      is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
+      is EvaluationResult.Success -> r.value
+    }
     val eligible = candidateIds.filter { id ->
       val card = state.cards[id] ?: return@filter false
-      card.orientation == CardOrientation.ACTIVE
+      (listed == null || id in listed) && card.orientation == CardOrientation.ACTIVE
     }.take(amount)
 
     if (eligible.isEmpty()) return InstructionExecutionResult.Completed(null, emptyList())
@@ -573,6 +578,9 @@ internal class DonInstructionExecutor {
       return fail("INVALID_TARGET_ZONE", "Target must be Leader or Character")
     }
 
+    if (donIds.toSet().size != donIds.size) {
+      return fail("DUPLICATE_CARDS", "Attached DON ids must be distinct")
+    }
     for (donId in donIds) {
       if (donId !in player.cost.cards) {
         return fail("DON_NOT_IN_COST", "DON must be in Cost area")
@@ -589,6 +597,27 @@ internal class DonInstructionExecutor {
       visibility = EventVisibility.PUBLIC,
     )
     return InstructionExecutionResult.Completed(null, listOf(event))
+  }
+
+  private fun listedDonIds(
+    state: GameState,
+    source: VariableId?,
+    variables: Map<VariableId, StoredValue>,
+  ): EvaluationResult<Set<CardInstanceId>?> {
+    if (source == null) return EvaluationResult.Success(null)
+    val ids = when (val value = variables[source]) {
+      is StoredValue.CardIdsValue -> value.value
+      is StoredValue.CardValue -> listOf(value.value)
+      null -> return EvaluationResult.Failed(VmError("MISSING_VARIABLE", "DON source missing: ${source.value}", 0))
+      else -> return EvaluationResult.Failed(VmError("INVALID_SOURCE", "DON source must be card ids", 0))
+    }
+    if (ids.toSet().size != ids.size) {
+      return EvaluationResult.Failed(VmError("DUPLICATE_CARDS", "DON source contains duplicate cards", 0))
+    }
+    if (ids.any { state.cards[it] == null }) {
+      return EvaluationResult.Failed(VmError("UNKNOWN_CARD", "DON source references a card not in the game", 0))
+    }
+    return EvaluationResult.Success(ids.toSet())
   }
 
   fun returnDon(
@@ -610,10 +639,15 @@ internal class DonInstructionExecutor {
     val zones = if (instruction.selector.zones.isEmpty()) setOf(ZoneType.COST) else instruction.selector.zones
     val requestedOrientation = instruction.selector.orientation
 
+    val listed = when (val r = listedDonIds(state, instruction.selector.source, variables)) {
+      is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
+      is EvaluationResult.Success -> r.value
+    }
     val candidates = mutableListOf<ReturnDonCandidate>()
     if (ZoneType.COST in zones) {
       for (id in player.cost.cards) {
         val card = state.cards[id] ?: continue
+        if (listed != null && id !in listed) continue
         if (requestedOrientation != null && card.orientation != requestedOrientation) continue
         candidates += ReturnDonCandidate(id, ZoneType.COST, null)
       }
@@ -623,6 +657,7 @@ internal class DonInstructionExecutor {
         for (donId in attachment.donCardIds) {
           val don = state.cards[donId] ?: continue
           if (don.ownerId != instruction.playerId) continue
+          if (listed != null && donId !in listed) continue
           if (requestedOrientation != null && don.orientation != requestedOrientation) continue
           candidates += ReturnDonCandidate(donId, ZoneType.ATTACHED_DON, attachment.hostCardId)
         }
