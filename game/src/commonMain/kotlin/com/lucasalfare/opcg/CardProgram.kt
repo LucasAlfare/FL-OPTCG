@@ -85,8 +85,10 @@ sealed class Duration {
 
 @Serializable
 enum class RuleAction {
-  PLAY_CARD, ACTIVATE_ABILITY, DECLARE_ATTACK, ACTIVATE_BLOCKER, USE_COUNTER, ATTACH_DON,
+  PLAY_CARD, ACTIVATE_ABILITY, DECLARE_ATTACK, ACTIVATE_BLOCKER, USE_COUNTER, ATTACH_DON, ATTACK_ACTIVE_CHARACTER,
 }
+
+val ACTIONS_REQUIRING_PERMISSION_TARGET: Set<RuleAction> = setOf(RuleAction.ATTACK_ACTIVE_CHARACTER)
 
 @Serializable
 data class RuleRestriction(
@@ -101,6 +103,7 @@ data class RulePermission(
   val action: RuleAction,
   val subject: CardSelector? = null,
   val condition: Condition? = null,
+  val target: CardSelector? = null,
 )
 
 @Serializable

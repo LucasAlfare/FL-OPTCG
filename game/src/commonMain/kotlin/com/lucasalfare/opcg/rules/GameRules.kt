@@ -639,7 +639,12 @@ internal class BattleResolver(
             violations += RuleViolation("INVALID_TARGET_ZONE", "Target must be opponent Leader or Character")
           }
           if (isOppCharacter && targetCard.orientation != CardOrientation.RESTED) {
-            violations += RuleViolation("TARGET_NOT_RESTED", "Character targets must be rested")
+            val permitted = canAttackActiveCharacter(
+              state, command, target.cardInstanceId, targetCard, targetController, continuous,
+            )
+            if (!permitted) {
+              violations += RuleViolation("TARGET_NOT_RESTED", "Character targets must be rested")
+            }
           }
         }
       }
@@ -666,6 +671,22 @@ internal class BattleResolver(
     }
 
     return ValidationResult(violations.isEmpty(), violations)
+  }
+
+  private fun canAttackActiveCharacter(
+    state: GameState,
+    command: DeclareAttackCommand,
+    targetId: CardInstanceId,
+    targetCard: CardInstance,
+    targetController: PlayerId,
+    continuous: ContinuousEffectProcessor,
+  ): Boolean {
+    if (targetController == command.playerId) return false
+    if (targetCard.orientation != CardOrientation.ACTIVE) return false
+    if (continuous.isActionRestricted(state, RuleAction.ATTACK_ACTIVE_CHARACTER, command.attackerId).isNotEmpty()) {
+      return false
+    }
+    return continuous.hasPermissionFor(state, RuleAction.ATTACK_ACTIVE_CHARACTER, command.attackerId, targetId)
   }
 
   fun validatePassBattleStep(

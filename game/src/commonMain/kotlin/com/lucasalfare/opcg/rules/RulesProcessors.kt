@@ -925,7 +925,7 @@ internal class ContinuousEffectProcessor(
       if (!isEffectActive(state, effect)) continue
       val restriction = modifier.restriction
       if (restriction.action != action) continue
-      if (!subjectMatches(state, effect, restriction.subject, subjectCardId)) continue
+      if (!selectorMatches(state, effect, restriction.subject, subjectCardId)) continue
       if (!conditionHolds(state, effect, restriction.condition)) continue
       violations += RuleViolation("RESTRICTED_ACTION", "Action is restricted by continuous effect")
     }
@@ -936,13 +936,16 @@ internal class ContinuousEffectProcessor(
     state: GameState,
     action: RuleAction,
     subjectCardId: CardInstanceId?,
+    targetCardId: CardInstanceId? = null,
   ): Boolean {
     for (effect in state.activeEffects) {
       val modifier = effect.modifier as? Modifier.PermissionModifier ?: continue
       if (!isEffectActive(state, effect)) continue
       val permission = modifier.permission
       if (permission.action != action) continue
-      if (!subjectMatches(state, effect, permission.subject, subjectCardId)) continue
+      if (permission.target == null && action in ACTIONS_REQUIRING_PERMISSION_TARGET) continue
+      if (!selectorMatches(state, effect, permission.subject, subjectCardId)) continue
+      if (!selectorMatches(state, effect, permission.target, targetCardId)) continue
       if (!conditionHolds(state, effect, permission.condition)) continue
       return true
     }
@@ -959,7 +962,7 @@ internal class ContinuousEffectProcessor(
     return results
   }
 
-  private fun subjectMatches(
+  private fun selectorMatches(
     state: GameState,
     effect: ActiveEffect,
     selector: CardSelector?,

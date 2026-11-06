@@ -263,8 +263,7 @@ class CardProgramValidator {
 
       is GrantPermission -> {
         val issues = validateDuration(instruction.duration, path).toMutableList()
-        instruction.permission.subject?.let { issues += validateSelector(it, path) }
-        instruction.permission.condition?.let { issues += validateCondition(it, path) }
+        issues += validatePermission(instruction.permission, path)
         issues
       }
 
@@ -341,6 +340,21 @@ class CardProgramValidator {
       )
     }
     selector.source?.let { issues += validateVariableId(it, path) }
+    return issues
+  }
+
+  private fun validatePermission(permission: RulePermission, path: List<Int>): List<ProgramValidationIssue> {
+    val issues = mutableListOf<ProgramValidationIssue>()
+    permission.subject?.let { issues += validateSelector(it, path) }
+    permission.target?.let { issues += validateSelector(it, path) }
+    permission.condition?.let { issues += validateCondition(it, path) }
+    if (permission.target == null && permission.action in ACTIONS_REQUIRING_PERMISSION_TARGET) {
+      issues += ProgramValidationIssue(
+        "MISSING_PERMISSION_TARGET",
+        "Permission ${permission.action} requires a target selector",
+        path,
+      )
+    }
     return issues
   }
 
@@ -457,8 +471,7 @@ class CardProgramValidator {
       is Modifier.KeywordModifier -> emptyList()
       is Modifier.ControlModifier -> emptyList()
       is Modifier.DamagePreventionModifier -> validateValue(modifier.amount, path)
-      is Modifier.PermissionModifier -> modifier.permission.condition?.let { validateCondition(it, path) }
-        ?: emptyList()
+      is Modifier.PermissionModifier -> validatePermission(modifier.permission, path)
 
       is Modifier.RestrictionModifier -> modifier.restriction.condition?.let { validateCondition(it, path) }
         ?: emptyList()
