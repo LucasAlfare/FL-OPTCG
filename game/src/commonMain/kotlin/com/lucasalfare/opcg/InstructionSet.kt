@@ -85,6 +85,7 @@ data class CardSelector(
   val types: Set<String> = emptySet(),
   val attributes: Set<CardAttribute> = emptySet(),
   val name: String? = null,
+  val orientation: CardOrientation? = null,
   val conditions: List<Condition> = emptyList(),
 )
 

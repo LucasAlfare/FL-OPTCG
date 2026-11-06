@@ -312,8 +312,18 @@ class CardProgramValidator {
     }
   }
 
-  private fun validateSelector(selector: CardSelector, path: List<Int>): List<ProgramValidationIssue> =
-    selector.conditions.flatMap { validateCondition(it, path) }
+  private fun validateSelector(selector: CardSelector, path: List<Int>): List<ProgramValidationIssue> {
+    val issues = mutableListOf<ProgramValidationIssue>()
+    if (selector.orientation == CardOrientation.NOT_APPLICABLE) {
+      issues += ProgramValidationIssue(
+        "INVALID_ORIENTATION_FILTER",
+        "CardSelector orientation filter cannot be NOT_APPLICABLE",
+        path,
+      )
+    }
+    issues += selector.conditions.flatMap { validateCondition(it, path) }
+    return issues
+  }
 
   private fun validateCost(cost: Cost, path: List<Int>): List<ProgramValidationIssue> {
     return when (cost) {
