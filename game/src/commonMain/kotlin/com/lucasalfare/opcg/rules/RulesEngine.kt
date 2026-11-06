@@ -765,16 +765,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
       is EvaluationResult.Success -> r.value
     }
-    val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: return failExec(
-      "INVALID_RANGE",
-      "SelectFromVariable minimum must evaluate to an integer",
-      0
-    )
-    val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: return failExec(
-      "INVALID_RANGE",
-      "SelectFromVariable maximum must evaluate to an integer",
-      0
-    )
+    val minVal = evaluateInt(instruction.minimum, state, context, variables)
+      ?: return failExec("INVALID_RANGE", "SelectFromVariable minimum must evaluate to an integer", 0)
+    val maxVal = evaluateInt(instruction.maximum, state, context, variables)
+      ?: return failExec("INVALID_RANGE", "SelectFromVariable maximum must evaluate to an integer", 0)
     if (minVal < 0 || maxVal < minVal) {
       return failExec("INVALID_RANGE", "Selection range $minVal..$maxVal is invalid", 0)
     }
@@ -1000,7 +994,18 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       controllerId = context.controllerId, targetCardIds = targetCardIds,
       targetPlayerId = targetPlayerId, modifier = modifier,
       duration = duration, timestampSequence = sequence,
+      nextOpponentTurn = nextOpponentTurnMarker(state, context.controllerId, duration),
     )
+  }
+
+  private fun nextOpponentTurnMarker(
+    state: GameState, controllerId: PlayerId, duration: Duration,
+  ): NextOpponentTurnMarker? {
+    if (duration !is Duration.UntilEndOfNextOpponentTurn) return null
+    val turn = state.turn ?: return null
+    val opponentId = state.playerOrder.firstOrNull { it != controllerId } ?: return null
+    val expiresOnTurnNumber = if (turn.playerId == controllerId) turn.number + 1 else turn.number + 2
+    return NextOpponentTurnMarker(opponentId, expiresOnTurnNumber)
   }
 
   private fun modifierAddedEvent(state: GameState, effect: ActiveEffect, sequence: Long): GameEvent {

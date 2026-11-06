@@ -862,7 +862,8 @@ internal class ContinuousEffectProcessor(
       is Duration.DuringBattle -> state.battle != null
       is Duration.WhileSourceValid -> isSourceValid(state, effect.sourceCardId)
       is Duration.WhileCondition -> isConditionSatisfied(state, effect, duration.condition)
-      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent -> true
+      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent,
+      is Duration.UntilEndOfNextOpponentTurn -> true
     }
   }
 
@@ -892,6 +893,11 @@ internal class ContinuousEffectProcessor(
 
         is Duration.WhileCondition -> {
           if (!isConditionSatisfied(state, effect, duration.condition)) expired += effect
+        }
+
+        is Duration.UntilEndOfNextOpponentTurn -> {
+          val marker = effect.nextOpponentTurn
+          if (marker != null && triggeringEvents.any { isOpponentTurnEnd(it, marker) }) expired += effect
         }
 
         is Duration.Permanent -> Unit
@@ -1071,6 +1077,12 @@ internal class ContinuousEffectProcessor(
     }
     if (state.donAttachments.any { cardId in it.donCardIds }) return ZoneType.ATTACHED_DON
     return null
+  }
+
+  private fun isOpponentTurnEnd(event: GameEvent, marker: NextOpponentTurnMarker): Boolean {
+    if (event.type != GameEventType.TURN_ENDED) return false
+    val payload = event.payload as? GameEventPayload.TurnEndedPayload ?: return false
+    return payload.playerId == marker.opponentId && payload.turnNumber >= marker.expiresOnTurnNumber
   }
 
   private fun matchesPattern(pattern: GameEventPattern, event: GameEvent): Boolean {

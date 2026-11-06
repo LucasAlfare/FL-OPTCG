@@ -71,6 +71,9 @@ sealed class Duration {
   data object UntilEndOfPhase : Duration()
 
   @Serializable
+  data object UntilEndOfNextOpponentTurn : Duration()
+
+  @Serializable
   data class UntilEvent(val pattern: GameEventPattern) : Duration()
 
   @Serializable
@@ -241,6 +244,13 @@ data class ActiveEffect(
   val modifier: Modifier,
   val duration: Duration,
   val timestampSequence: Long,
+  val nextOpponentTurn: NextOpponentTurnMarker? = null,
+)
+
+@Serializable
+data class NextOpponentTurnMarker(
+  val opponentId: PlayerId,
+  val expiresOnTurnNumber: Int,
 )
 
 @Serializable
