@@ -224,7 +224,6 @@ class CardProgramValidator {
         issues += validateDonSelector(instruction.selector, path)
         issues
       }
-
       is DetachDon -> validateValue(instruction.amount, path)
       is RestCards -> emptyList()
       is SetCardState -> emptyList()
@@ -386,12 +385,12 @@ class CardProgramValidator {
     path: List<Int>,
   ): List<ProgramValidationIssue> {
     val issues = mutableListOf<ProgramValidationIssue>()
-    val hasInstance = reference.instanceId != null
-    val hasVariable = reference.variableId != null
-    if (hasInstance == hasVariable) {
+    val originCount = listOf(reference.instanceId != null, reference.variableId != null, reference.currentCard)
+      .count { it }
+    if (originCount != 1) {
       issues += ProgramValidationIssue(
         "INVALID_CARD_REFERENCE",
-        "CardReference must have exactly one of instanceId or variableId",
+        "CardReference must have exactly one of instanceId, variableId or currentCard",
         path,
       )
     }
@@ -419,6 +418,19 @@ class CardProgramValidator {
       is Condition.AnyCondition -> condition.conditions.flatMap { validateCondition(it, path) }
       is Condition.NotCondition -> validateCondition(condition.condition, path)
       is Condition.Exists -> validateSelector(condition.selector, path)
+      is Condition.CardPropertyComparison -> {
+        val issues = mutableListOf<ProgramValidationIssue>()
+        issues += validateCardReference(condition.leftCard, path)
+        issues += validateCardReference(condition.rightCard, path)
+        if (condition.operator != ComparisonOperator.EQUAL && condition.operator != ComparisonOperator.NOT_EQUAL) {
+          issues += ProgramValidationIssue(
+            "INVALID_PROPERTY_OPERATOR",
+            "Card property comparison supports only EQUAL and NOT_EQUAL",
+            path,
+          )
+        }
+        issues
+      }
     }
   }
 

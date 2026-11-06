@@ -74,6 +74,14 @@ sealed class Condition {
 
   @Serializable
   data class Exists(val selector: CardSelector) : Condition()
+
+  @Serializable
+  data class CardPropertyComparison(
+    val leftCard: CardReference,
+    val property: CardProperty,
+    val operator: ComparisonOperator,
+    val rightCard: CardReference,
+  ) : Condition()
 }
 
 @Serializable
@@ -108,10 +116,11 @@ data class ZoneDestination(
 data class CardReference(
   val instanceId: CardInstanceId? = null,
   val variableId: VariableId? = null,
+  val currentCard: Boolean = false,
 ) {
   init {
-    require((instanceId != null) xor (variableId != null)) {
-      "CardReference requires exactly one of instanceId or variableId"
+    require(listOf(instanceId != null, variableId != null, currentCard).count { it } == 1) {
+      "CardReference requires exactly one of instanceId, variableId or currentCard"
     }
   }
 }

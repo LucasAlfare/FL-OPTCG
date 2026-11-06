@@ -1030,8 +1030,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     reference: CardReference,
     variables: Map<VariableId, StoredValue>,
     context: EffectContext,
+    candidateCardId: CardInstanceId? = null,
   ): CardInstanceId? {
     reference.instanceId?.let { return it }
+    if (reference.currentCard) return candidateCardId
     val variableId = reference.variableId ?: return null
     if (variableId == SOURCE_CARD) return context.sourceCardId
     return when (val value = variables[variableId]) {
@@ -1126,7 +1128,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       }
 
       is ValueExpr.CardCharacteristic -> {
-        val cardId = resolveCardReference(expression.cardReference, variables, context) ?: return evalFail(
+        val cardId = resolveCardReference(expression.cardReference, variables, context, candidateCardId) ?: return evalFail(
           "MISSING_CARD_REFERENCE",
           "Card reference did not resolve to exactly one card",
         )
@@ -1193,7 +1195,98 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         )
         EvaluationResult.Success(compare(condition.operator, left, right))
       }
+
+      is Condition.CardPropertyComparison -> evaluateCardPropertyComparison(
+        state, condition, context, variables, candidateCardId,
+      )
     }
+  }
+
+  private fun evaluateCardPropertyComparison(
+    state: GameState,
+    condition: Condition.CardPropertyComparison,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+    candidateCardId: CardInstanceId?,
+  ): EvaluationResult<Boolean> {
+    if (condition.operator != ComparisonOperator.EQUAL && condition.operator != ComparisonOperator.NOT_EQUAL) {
+      return evalFail("INVALID_OPERATOR", "Card property comparison supports only EQUAL and NOT_EQUAL")
+    }
+    val leftCard = when (val r = resolveSingleCard(state, condition.leftCard, variables, context, candidateCardId)) {
+      is EvaluationResult.Failed -> return r
+      is EvaluationResult.Success -> r.value
+    }
+    val rightCard = when (val r = resolveSingleCard(state, condition.rightCard, variables, context, candidateCardId)) {
+      is EvaluationResult.Failed -> return r
+      is EvaluationResult.Success -> r.value
+    }
+    val leftValue = when (val r = effectiveProperty(state, leftCard, condition.property)) {
+      is EvaluationResult.Failed -> return r
+      is EvaluationResult.Success -> r.value
+    }
+    val rightValue = when (val r = effectiveProperty(state, rightCard, condition.property)) {
+      is EvaluationResult.Failed -> return r
+      is EvaluationResult.Success -> r.value
+    }
+    val equal = leftValue == rightValue
+    return EvaluationResult.Success(if (condition.operator == ComparisonOperator.EQUAL) equal else !equal)
+  }
+
+  private fun resolveSingleCard(
+    state: GameState,
+    reference: CardReference,
+    variables: Map<VariableId, StoredValue>,
+    context: EffectContext,
+    candidateCardId: CardInstanceId?,
+  ): EvaluationResult<CardInstanceId> {
+    if (reference.instanceId != null) return checkCardExists(state, reference.instanceId)
+    if (reference.currentCard) {
+      val candidate = candidateCardId ?: return evalFail(
+        "NO_CANDIDATE", "CURRENT_CARD is only valid inside a selector condition",
+      )
+      return checkCardExists(state, candidate)
+    }
+    val variableId = reference.variableId ?: return evalFail(
+      "INVALID_CARD_REFERENCE", "CardReference has no target",
+    )
+    if (variableId == SOURCE_CARD) {
+      val source = context.sourceCardId ?: return evalFail(
+        "MISSING_SOURCE_CARD", "SOURCE_CARD is not available in this context",
+      )
+      return checkCardExists(state, source)
+    }
+    val cardId = when (val value = variables[variableId]) {
+      null -> return evalFail("MISSING_VARIABLE", "Variable not found: ${variableId.value}")
+      is StoredValue.CardValue -> value.value
+      is StoredValue.CardIdsValue -> value.value.singleOrNull() ?: return evalFail(
+        "CARD_REFERENCE_COUNT", "Variable ${variableId.value} must hold exactly one card",
+      )
+
+      else -> return evalFail("INVALID_CARD_REFERENCE", "Variable ${variableId.value} does not hold a card")
+    }
+    return checkCardExists(state, cardId)
+  }
+
+  private fun checkCardExists(state: GameState, cardId: CardInstanceId): EvaluationResult<CardInstanceId> {
+    return if (state.cards[cardId] != null) {
+      EvaluationResult.Success(cardId)
+    } else {
+      evalFail("UNKNOWN_CARD", "Card not found in game")
+    }
+  }
+
+  private fun effectiveProperty(
+    state: GameState,
+    cardId: CardInstanceId,
+    property: CardProperty,
+  ): EvaluationResult<PropertyValue> {
+    val characteristics = effectiveCharacteristics(state, cardId) ?: return evalFail(
+      "MISSING_CHARACTERISTIC", "Effective characteristics unavailable for card",
+    )
+    val value = propertyValueFrom(characteristics, property) ?: return evalFail(
+      "MISSING_PROPERTY", "Property $property unavailable",
+    )
+    return EvaluationResult.Success(value)
   }
 
   private fun computeArithmetic(operator: ArithmeticOperator, left: Int, right: Int): Int? {
