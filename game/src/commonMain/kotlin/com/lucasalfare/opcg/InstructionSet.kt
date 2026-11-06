@@ -157,6 +157,17 @@ data class SelectCards(
 ) : Instruction
 
 @Serializable
+data class SelectFromVariable(
+  val source: VariableId,
+  val selector: CardSelector,
+  val playerId: PlayerId,
+  val minimum: ValueExpr,
+  val maximum: ValueExpr,
+  val destination: VariableId,
+  val remainderDestination: VariableId? = null,
+) : Instruction
+
+@Serializable
 data class CountCards(
   val selector: CardSelector,
   val destination: VariableId,

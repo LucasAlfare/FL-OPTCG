@@ -100,6 +100,42 @@ class CardProgramValidator {
         issues
       }
 
+      is SelectFromVariable -> {
+        val issues = validateSelector(instruction.selector, path).toMutableList()
+        issues += validateNumericBounds(instruction.minimum, instruction.maximum, path)
+        if (instruction.selector.zones.isNotEmpty()) {
+          issues += ProgramValidationIssue(
+            "UNSUPPORTED_SELECTOR_ZONES",
+            "SelectFromVariable cannot filter by zones",
+            path,
+          )
+        }
+        if (instruction.destination == instruction.source) {
+          issues += ProgramValidationIssue(
+            "INVALID_DESTINATION",
+            "SelectFromVariable destination must differ from source",
+            path,
+          )
+        }
+        instruction.remainderDestination?.let { remainder ->
+          if (remainder == instruction.source) {
+            issues += ProgramValidationIssue(
+              "INVALID_DESTINATION",
+              "SelectFromVariable remainder destination must differ from source",
+              path,
+            )
+          }
+          if (remainder == instruction.destination) {
+            issues += ProgramValidationIssue(
+              "DUPLICATE_DESTINATION",
+              "SelectFromVariable destinations must differ",
+              path,
+            )
+          }
+        }
+        issues
+      }
+
       is CountCards -> validateSelector(instruction.selector, path)
       is LookAtTop -> {
         val allowed = setOf(ZoneType.DECK, ZoneType.LIFE, ZoneType.DON_DECK)

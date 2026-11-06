@@ -257,6 +257,7 @@ class VirtualMachine(
 
     return when (val current = block[frame.instructionPointer]) {
       is Optional -> resumeOptional(frame, choice, stateWithoutChoice, clearEvents, current)
+      is SelectFromVariable -> resumeSelectFromVariable(frame, choice, stateWithoutChoice, clearEvents, current)
       else -> resumeExecutorChoice(frame, choice, stateWithoutChoice, clearEvents, current, pending)
     }
   }
@@ -298,6 +299,40 @@ class VirtualMachine(
       frame.variables + (VariableId("__choice_result") to stored)
     }
     // Advance past the instruction that produced the choice — do not re-execute it
+    val advanced = frame.copy(
+      status = ProgramStatus.RUNNING,
+      pendingChoiceId = null,
+      variables = variables,
+      instructionPointer = frame.instructionPointer + 1,
+    )
+    val (stateWithFrame, frameEvents) = emitFrameChanged(state, frame.id, advanced)
+    return run(advanced, stateWithFrame, priorEvents + frameEvents)
+  }
+
+  private fun resumeSelectFromVariable(
+    frame: ProgramFrame,
+    choice: PlayerChoice,
+    state: GameState,
+    priorEvents: List<GameEvent>,
+    instruction: SelectFromVariable,
+  ): VmTransition {
+    val answer = choice.answer as? ChoiceAnswer.CardSelectionAnswer
+      ?: return fail(frame, state, priorEvents, "INVALID_ANSWER", "Expected card selection answer")
+    val sourceIds = when (val source = frame.variables[instruction.source]) {
+      null -> return fail(
+        frame, state, priorEvents, "MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}"
+      )
+
+      is StoredValue.CardIdsValue -> source.value
+      else -> return fail(frame, state, priorEvents, "INVALID_SOURCE", "SelectFromVariable requires card ids")
+    }
+    val selectedIds = answer.cardIds.toSet()
+    val selected = sourceIds.filter { it in selectedIds }
+    val remainder = sourceIds.filter { it !in selectedIds }
+    var variables = frame.variables + (instruction.destination to StoredValue.CardIdsValue(selected))
+    instruction.remainderDestination?.let { remainderVariable ->
+      variables = variables + (remainderVariable to StoredValue.CardIdsValue(remainder))
+    }
     val advanced = frame.copy(
       status = ProgramStatus.RUNNING,
       pendingChoiceId = null,

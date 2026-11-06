@@ -501,6 +501,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is SetCardState -> zoneInstructionExecutor.setCardState(state, instruction, context, variables)
       is ActivateAbility -> effectScheduler.executeActivateInstruction(state, instruction, context, variables, this)
       is SelectCards -> executeSelectCards(state, instruction, context, variables)
+      is SelectFromVariable -> executeSelectFromVariable(state, instruction, context, variables)
       is CountCards -> executeCountCards(state, instruction, context, variables)
       is LookAtTop -> executeLookAtTop(state, instruction, context, variables)
       is RevealCards -> executeRevealCards(state, instruction, context, variables)
@@ -724,6 +725,55 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       playerId = instruction.playerId, frameId = ExecutionId("pending"),
       type = ChoiceType.CARD_SELECTION,
       minimum = minVal.coerceAtLeast(0), maximum = maxVal.coerceAtLeast(minVal),
+      candidates = candidates.map { ChoiceCandidate.CardCandidate(it) },
+      visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
+    )
+    return InstructionExecutionResult.Suspended(choice)
+  }
+
+  private fun executeSelectFromVariable(
+    state: GameState, instruction: SelectFromVariable, context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    if (instruction.selector.zones.isNotEmpty()) {
+      return failExec("UNSUPPORTED_SELECTOR", "SelectFromVariable cannot filter by zones", 0)
+    }
+    if (instruction.destination == instruction.source || instruction.remainderDestination == instruction.source) {
+      return failExec("INVALID_DESTINATION", "SelectFromVariable cannot overwrite its source variable", 0)
+    }
+    if (instruction.remainderDestination != null && instruction.remainderDestination == instruction.destination) {
+      return failExec("DUPLICATE_DESTINATION", "SelectFromVariable destinations must differ", 0)
+    }
+    val sourceIds = when (val v = variables[instruction.source]) {
+      null -> return failExec("MISSING_VARIABLE", "Source variable not found: ${instruction.source.value}", 0)
+      is StoredValue.CardIdsValue -> v.value
+      else -> return failExec("INVALID_SOURCE", "SelectFromVariable requires card ids", 0)
+    }
+    if (sourceIds.toSet().size != sourceIds.size) {
+      return failExec("DUPLICATE_CARDS", "Source variable contains duplicate cards", 0)
+    }
+    if (sourceIds.any { state.cards[it] == null }) {
+      return failExec("UNKNOWN_CARD", "Source variable references a card not in the game", 0)
+    }
+
+    val matching = sourceIds.filter { matchesSelectorFilters(instruction.selector, state, context, it) }
+    val candidates = when (val r = filterByConditions(instruction.selector, state, context, variables, matching)) {
+      is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
+      is EvaluationResult.Success -> r.value
+    }
+    val minVal = evaluateInt(instruction.minimum, state, context, variables)
+      ?: return failExec("INVALID_RANGE", "SelectFromVariable minimum must evaluate to an integer", 0)
+    val maxVal = evaluateInt(instruction.maximum, state, context, variables)
+      ?: return failExec("INVALID_RANGE", "SelectFromVariable maximum must evaluate to an integer", 0)
+    if (minVal < 0 || maxVal < minVal) {
+      return failExec("INVALID_RANGE", "Selection range $minVal..$maxVal is invalid", 0)
+    }
+
+    val choice = PendingChoice(
+      id = ChoiceId("${state.id.value}:selvar:${state.lastEventSequence + 1}"),
+      playerId = instruction.playerId, frameId = ExecutionId("pending"),
+      type = ChoiceType.CARD_SELECTION,
+      minimum = minOf(minVal, candidates.size), maximum = minOf(maxVal, candidates.size),
       candidates = candidates.map { ChoiceCandidate.CardCandidate(it) },
       visibility = EventVisibility.PRIVATE_TO_PLAYER(instruction.playerId),
     )
@@ -1207,15 +1257,22 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
           }.flatMap { it.donCardIds }
         }
         for (cardId in cardIds) {
-          if (matchesSelectorFilters(selector, state, context, cardId, playerId, zone)) candidates += cardId
+          if (matchesSelectorFilters(selector, state, context, cardId)) candidates += cardId
         }
       }
     }
 
-    if (selector.conditions.isEmpty()) return EvaluationResult.Success(candidates)
+    return filterByConditions(selector, state, context, variables, candidates)
+  }
+
+  private fun filterByConditions(
+    selector: CardSelector, state: GameState, context: EffectContext,
+    variables: Map<VariableId, StoredValue>, cardIds: List<CardInstanceId>,
+  ): EvaluationResult<List<CardInstanceId>> {
+    if (selector.conditions.isEmpty()) return EvaluationResult.Success(cardIds)
 
     val filtered = mutableListOf<CardInstanceId>()
-    for (cardId in candidates) {
+    for (cardId in cardIds) {
       var ok = true
       for (condition in selector.conditions) {
         when (val result = evaluateCondition(condition, state, context, variables, cardId)) {
@@ -1232,7 +1289,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
 
   private fun matchesSelectorFilters(
     selector: CardSelector, state: GameState, context: EffectContext,
-    cardId: CardInstanceId, zoneOwnerId: PlayerId, zone: ZoneType,
+    cardId: CardInstanceId,
   ): Boolean {
     val instance = state.cards[cardId] ?: return false
     val definition = cardCatalog.get(instance.definitionId) ?: return false
