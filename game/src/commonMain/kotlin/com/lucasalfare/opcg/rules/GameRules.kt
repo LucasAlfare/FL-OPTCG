@@ -111,6 +111,7 @@ internal class DeckValidator(
     val mainNumberCounts = mutableMapOf<String, Int>()
     val mainColors = mutableSetOf<CardColor>()
     val validatedMainDefs = mutableSetOf<CardDefinitionId>()
+    val unlimitedMainNumbers = mutableSetOf<String>()
 
     for (defId in deck.cards) {
       val def = cardCatalog.get(defId)
@@ -135,6 +136,7 @@ internal class DeckValidator(
       }
       mainColors += def.colors
       mainNumberCounts[def.number] = (mainNumberCounts[def.number] ?: 0) + 1
+      if (def.unlimitedCopies) unlimitedMainNumbers += def.number
       if (effectiveFormat.bannedCardNumbers.contains(def.number)) {
         violations += DeckViolation(
           code = "BANNED_CARD",
@@ -151,6 +153,7 @@ internal class DeckValidator(
 
     for ((number, count) in mainNumberCounts) {
       val restrictedLimit = effectiveFormat.restrictedCardNumbers[number]
+      if (restrictedLimit == null && number in unlimitedMainNumbers) continue
       val maxAllowed = restrictedLimit ?: effectiveFormat.maximumCopies
       if (count > maxAllowed) {
         violations += DeckViolation(
@@ -178,6 +181,7 @@ internal class DeckValidator(
 
     val donNumberCounts = mutableMapOf<String, Int>()
     val validatedDonDefs = mutableSetOf<CardDefinitionId>()
+    val unlimitedDonNumbers = mutableSetOf<String>()
 
     for (defId in deck.donDeck) {
       val def = cardCatalog.get(defId)
@@ -201,6 +205,7 @@ internal class DeckValidator(
         )
       }
       donNumberCounts[def.number] = (donNumberCounts[def.number] ?: 0) + 1
+      if (def.unlimitedCopies) unlimitedDonNumbers += def.number
       if (effectiveFormat.bannedCardNumbers.contains(def.number)) {
         violations += DeckViolation(
           code = "BANNED_CARD",
@@ -217,6 +222,7 @@ internal class DeckValidator(
 
     for ((number, count) in donNumberCounts) {
       val restrictedLimit = effectiveFormat.restrictedCardNumbers[number]
+      if (restrictedLimit == null && number in unlimitedDonNumbers) continue
       val maxAllowed = restrictedLimit ?: effectiveFormat.maximumCopies
       if (count > maxAllowed) {
         violations += DeckViolation(

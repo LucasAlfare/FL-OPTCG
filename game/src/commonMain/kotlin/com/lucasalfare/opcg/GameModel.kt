@@ -393,6 +393,7 @@ data class CardDefinition(
   val attributes: Set<CardAttribute>, val baseCost: Int?, val basePower: Int?,
   val life: Int?, val counter: Int?, val keywords: Set<KeywordEffect>,
   val abilities: List<AbilityDefinition>,
+  val unlimitedCopies: Boolean = false,
 )
 
 @Serializable
