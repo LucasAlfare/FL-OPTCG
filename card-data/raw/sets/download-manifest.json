@@ -1,15 +1,13 @@
 {
   "provider": "OPTCG API",
-  "base_url": "https://optcgapi.com/api",
-  "updated_at_utc": "2026-11-06T00:10:27+00:00",
-  "price_fields_removed": "All object keys containing 'price' (case-insensitive)",
   "sets": {
     "OP-01": {
-      "file": "OP-01.json",
       "endpoint": "https://optcgapi.com/api/sets/OP-01/",
-      "retrieved_at_utc": "2026-11-06T00:10:27+00:00",
-      "record_count": 154,
-      "sha256": "bdfc66a6249ea41d228309b6535d3c250ceb6930a5064ccc601318a5ce368f52"
+      "retrieved_at_utc": "2026-11-06T00:43:17+00:00",
+      "raw_file": "OP-01.json",
+      "raw_record_count": 154,
+      "raw_sha256": "bdfc66a6249ea41d228309b6535d3c250ceb6930a5064ccc601318a5ce368f52"
     }
-  }
+  },
+  "updated_at_utc": "2026-11-06T00:43:17+00:00"
 }
