@@ -224,6 +224,7 @@ class CardProgramValidator {
         issues += validateDonSelector(instruction.selector, path)
         issues
       }
+
       is DetachDon -> validateValue(instruction.amount, path)
       is RestCards -> emptyList()
       is SetCardState -> emptyList()
@@ -255,9 +256,7 @@ class CardProgramValidator {
       is NegateEffects -> validateDuration(instruction.duration, path)
       is ApplyRestriction -> {
         val issues = validateDuration(instruction.duration, path).toMutableList()
-        instruction.restriction.subject?.let { issues += validateSelector(it, path) }
-        instruction.restriction.maximumUses?.let { issues += validateValue(it, path) }
-        instruction.restriction.condition?.let { issues += validateCondition(it, path) }
+        issues += validateRuleRestriction(instruction.restriction, path)
         issues
       }
 
@@ -340,6 +339,30 @@ class CardProgramValidator {
       )
     }
     selector.source?.let { issues += validateVariableId(it, path) }
+    return issues
+  }
+
+  private fun validateRuleRestriction(restriction: RuleRestriction, path: List<Int>): List<ProgramValidationIssue> {
+    val issues = mutableListOf<ProgramValidationIssue>()
+    restriction.subject?.let { issues += validateSelector(it, path) }
+    restriction.source?.let { issues += validateSelector(it, path) }
+    restriction.maximumUses?.let { issues += validateValue(it, path) }
+    restriction.condition?.let { issues += validateCondition(it, path) }
+    val isKnockOutRestriction = restriction.action == RuleAction.BE_KNOCKED_OUT
+    if (isKnockOutRestriction && restriction.cause == null) {
+      issues += ProgramValidationIssue(
+        "MISSING_KNOCK_OUT_CAUSE",
+        "BE_KNOCKED_OUT restriction requires a cause",
+        path,
+      )
+    }
+    if (!isKnockOutRestriction && (restriction.cause != null || restriction.source != null)) {
+      issues += ProgramValidationIssue(
+        "UNEXPECTED_KNOCK_OUT_FIELDS",
+        "cause and source apply only to BE_KNOCKED_OUT restrictions",
+        path,
+      )
+    }
     return issues
   }
 
@@ -473,8 +496,7 @@ class CardProgramValidator {
       is Modifier.DamagePreventionModifier -> validateValue(modifier.amount, path)
       is Modifier.PermissionModifier -> validatePermission(modifier.permission, path)
 
-      is Modifier.RestrictionModifier -> modifier.restriction.condition?.let { validateCondition(it, path) }
-        ?: emptyList()
+      is Modifier.RestrictionModifier -> validateRuleRestriction(modifier.restriction, path)
 
       is Modifier.EffectNegationModifier -> emptyList()
       is Modifier.ActivationCostModifier -> validateCost(modifier.cost, path)

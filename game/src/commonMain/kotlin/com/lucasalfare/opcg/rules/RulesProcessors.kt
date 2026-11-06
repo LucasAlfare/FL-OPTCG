@@ -75,7 +75,10 @@ internal class DamageProcessor(
       events += result.events
       programs += result.programs
       seq = result.lastSeq
-    } else if (targetCardId != null) {
+    } else if (targetCardId != null && !continuous.isKnockOutPrevented(
+        state, targetCardId, KnockOutCause.BATTLE, battle.attackerId,
+      )
+    ) {
       val targetCard = state.cards[targetCardId]
       if (targetCard != null) {
         val ownerId = targetCard.ownerId
@@ -153,6 +156,7 @@ internal class DamageProcessor(
 
     for (cardId in cardIds) {
       val card = state.cards[cardId] ?: continue
+      if (continuous.isKnockOutPrevented(state, cardId, KnockOutCause.EFFECT, context.sourceCardId)) continue
       val ownerId = card.ownerId
 
       seq += 1
@@ -947,6 +951,27 @@ internal class ContinuousEffectProcessor(
       if (!selectorMatches(state, effect, permission.subject, subjectCardId)) continue
       if (!selectorMatches(state, effect, permission.target, targetCardId)) continue
       if (!conditionHolds(state, effect, permission.condition)) continue
+      return true
+    }
+    return false
+  }
+
+  fun isKnockOutPrevented(
+    state: GameState,
+    targetCardId: CardInstanceId,
+    cause: KnockOutCause,
+    sourceCardId: CardInstanceId?,
+  ): Boolean {
+    for (effect in state.activeEffects) {
+      val modifier = effect.modifier as? Modifier.RestrictionModifier ?: continue
+      if (!isEffectActive(state, effect)) continue
+      val restriction = modifier.restriction
+      if (restriction.action != RuleAction.BE_KNOCKED_OUT) continue
+      val expectedCause = restriction.cause ?: continue
+      if (expectedCause != KnockOutCause.ANY && expectedCause != cause) continue
+      if (!selectorMatches(state, effect, restriction.subject, targetCardId)) continue
+      if (restriction.source != null && !selectorMatches(state, effect, restriction.source, sourceCardId)) continue
+      if (!conditionHolds(state, effect, restriction.condition)) continue
       return true
     }
     return false

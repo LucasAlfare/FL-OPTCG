@@ -85,7 +85,12 @@ sealed class Duration {
 
 @Serializable
 enum class RuleAction {
-  PLAY_CARD, ACTIVATE_ABILITY, DECLARE_ATTACK, ACTIVATE_BLOCKER, USE_COUNTER, ATTACH_DON, ATTACK_ACTIVE_CHARACTER,
+  PLAY_CARD, ACTIVATE_ABILITY, DECLARE_ATTACK, ACTIVATE_BLOCKER, USE_COUNTER, ATTACH_DON, ATTACK_ACTIVE_CHARACTER, BE_KNOCKED_OUT,
+}
+
+@Serializable
+enum class KnockOutCause {
+  BATTLE, EFFECT, ANY,
 }
 
 val ACTIONS_REQUIRING_PERMISSION_TARGET: Set<RuleAction> = setOf(RuleAction.ATTACK_ACTIVE_CHARACTER)
@@ -96,6 +101,8 @@ data class RuleRestriction(
   val subject: CardSelector? = null,
   val maximumUses: ValueExpr? = null,
   val condition: Condition? = null,
+  val cause: KnockOutCause? = null,
+  val source: CardSelector? = null,
 )
 
 @Serializable
