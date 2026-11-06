@@ -209,6 +209,13 @@ data class ReturnCardsToOwnerHand(
 ) : Instruction
 
 @Serializable
+@SerialName("RETURN_CARDS_TO_OWNER_DECK")
+data class ReturnCardsToOwnerDeck(
+  val source: VariableId,
+  val placement: Placement,
+) : Instruction
+
+@Serializable
 data class CountCards(
   val selector: CardSelector,
   val destination: VariableId,

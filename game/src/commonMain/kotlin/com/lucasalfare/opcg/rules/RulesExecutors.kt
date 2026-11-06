@@ -12,8 +12,10 @@ internal class ZoneInstructionExecutor {
     context: EffectContext,
     evaluator: RulesEngine,
   ): InstructionExecutionResult {
-    val matched = evaluator.selectCardIds(instruction.selector, state, context)
-      ?: return fail("SELECTOR_ERROR", "Failed to evaluate card selector")
+    val matched = evaluator.selectCardIds(instruction.selector, state, context) ?: return fail(
+      "SELECTOR_ERROR",
+      "Failed to evaluate card selector"
+    )
     return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(matched), emptyList())
   }
 
@@ -219,6 +221,75 @@ internal class ZoneInstructionExecutor {
           toPlayerId = entry.ownerId,
           toZone = ZoneType.HAND,
           destinationIndex = null,
+          newObjectId = null,
+          orientation = CardOrientation.NOT_APPLICABLE,
+          faceState = FaceState.FACE_DOWN,
+          visibility = CardVisibility.OWNER_ONLY,
+        ),
+        visibility = EventVisibility.PRIVATE_TO_PLAYER(entry.ownerId),
+      )
+    }
+    return InstructionExecutionResult.Completed(null, events)
+  }
+
+  fun returnCardsToOwnerDeck(
+    state: GameState,
+    instruction: ReturnCardsToOwnerDeck,
+    variables: Map<VariableId, StoredValue>,
+    informationManager: InformationManager,
+  ): InstructionExecutionResult {
+    val cardIds = when (val source = variables[instruction.source]) {
+      is StoredValue.CardIdsValue -> source.value
+      is StoredValue.CardValue -> listOf(source.value)
+      null -> return fail("MISSING_VARIABLE", "ReturnCardsToOwnerDeck source missing")
+      else -> return fail("INVALID_SOURCE", "ReturnCardsToOwnerDeck source must be cards")
+    }
+    if (cardIds.toSet().size != cardIds.size) {
+      return fail("DUPLICATE_CARDS", "ReturnCardsToOwnerDeck source contains duplicate cards")
+    }
+
+    val returns = cardIds.map { cardId ->
+      val instance = state.cards[cardId] ?: return fail("UNKNOWN_CARD", "Card $cardId not found")
+      val (fromPlayerId, fromZone) = locateCard(state, cardId) ?: return fail(
+        "CARD_NOT_LOCATED", "Card $cardId is not in any zone"
+      )
+      if (fromZone == ZoneType.DON_DECK || fromZone == ZoneType.ATTACHED_DON || fromZone == ZoneType.COST) {
+        return fail("INVALID_SOURCE_ZONE", "Card $cardId in $fromZone cannot return to deck")
+      }
+      DeckReturn(cardId, instance.ownerId, fromPlayerId, fromZone)
+    }
+
+    val destinationIndex = when (instruction.placement) {
+      Placement.TOP -> 0
+      Placement.BOTTOM, Placement.DEFAULT -> null
+    }
+
+    val events = mutableListOf<GameEvent>()
+    var seq = state.lastEventSequence
+    for (entry in returns) {
+      if (informationManager.needsTemporaryReveal(entry.fromZone, ZoneType.DECK)) {
+        seq += 1
+        events += informationManager.revealEvent(
+          state = state,
+          cardIds = listOf(entry.cardId),
+          cardVisibility = CardVisibility.PLAYERS(setOf(entry.ownerId)),
+          eventVisibility = EventVisibility.PRIVATE_TO_PLAYER(entry.ownerId),
+          sequence = seq,
+        )
+      }
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_MOVED,
+        sourceCardId = entry.cardId,
+        payload = GameEventPayload.CardMovedPayload(
+          cardId = entry.cardId,
+          fromPlayerId = entry.fromPlayerId,
+          fromZone = entry.fromZone,
+          toPlayerId = entry.ownerId,
+          toZone = ZoneType.DECK,
+          destinationIndex = destinationIndex,
           newObjectId = null,
           orientation = CardOrientation.NOT_APPLICABLE,
           faceState = FaceState.FACE_DOWN,
@@ -532,6 +603,13 @@ internal class ZoneInstructionExecutor {
   }
 
   private data class HandReturn(
+    val cardId: CardInstanceId,
+    val ownerId: PlayerId,
+    val fromPlayerId: PlayerId,
+    val fromZone: ZoneType,
+  )
+
+  private data class DeckReturn(
     val cardId: CardInstanceId,
     val ownerId: PlayerId,
     val fromPlayerId: PlayerId,

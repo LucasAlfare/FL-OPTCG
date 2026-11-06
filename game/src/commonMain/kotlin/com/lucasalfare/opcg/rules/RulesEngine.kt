@@ -518,6 +518,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
         state, instruction, variables, informationManager,
       )
 
+      is ReturnCardsToOwnerDeck -> zoneInstructionExecutor.returnCardsToOwnerDeck(
+        state, instruction, variables, informationManager,
+      )
+
       is TrashFromHand -> zoneInstructionExecutor.trashFromHand(state, instruction, context, variables, this)
       is PlayCard -> zoneInstructionExecutor.playCard(
         state, instruction, context, variables, cardCatalog, continuousEffectProcessor, this,

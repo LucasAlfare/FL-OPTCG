@@ -146,7 +146,6 @@ class CardProgramValidator {
         issues
       }
 
-      is ReturnCardsToOwnerHand -> emptyList()
       is CountCards -> validateSelector(instruction.selector, path)
       is LookAtTop -> {
         val allowed = setOf(ZoneType.DECK, ZoneType.LIFE, ZoneType.DON_DECK)
@@ -296,6 +295,8 @@ class CardProgramValidator {
       is RegisterReplacement -> validateReplacementDefinition(instruction.definition, path, depth + 1)
       is ActivateAbility -> instruction.selector.cardSelector?.let { validateSelector(it, path) } ?: emptyList()
       is SetGameResult -> emptyList()
+      is ReturnCardsToOwnerDeck -> emptyList()
+      is ReturnCardsToOwnerHand -> emptyList()
     }
   }
 
