@@ -406,7 +406,10 @@ Integer division in `DIVIDE` truncates toward zero. For non-negative card-count 
 - `ACTIVATE_BLOCKER`
 - `USE_COUNTER`
 - `ATTACH_DON`
+- `ATTACK_ACTIVE_CHARACTER`
 - `BE_KNOCKED_OUT`
+
+`DECLARE_ATTACK` is a general permission to declare an attack. `ATTACK_ACTIVE_CHARACTER` is a specific permission to attack an opponent's active Character; a permission with this action MUST declare a `target` selector. It overrides exclusively the `TARGET_NOT_RESTED` restriction for a matching target; it MUST NOT allow attacks against own cards, ignore zone restrictions, bypass Rush timing, or ignore any other applicable restriction.
 
 `KnockOutCause`: `BATTLE`, `EFFECT`, `ANY`.
 
@@ -916,13 +919,15 @@ By contrast, `MODIFY_CHARACTERISTIC` and `SET_BASE_CHARACTERISTIC` instructions 
 - `target` — optional `CardSelector` restricting the action target;
 - `condition` — optional `Condition`.
 
-For `DECLARE_ATTACK`, `subject` identifies the attacking card and `target` identifies the target card. A permission to attack active Characters MUST constrain the target to opponent Characters with `orientation = "ACTIVE"`. The permission MUST override only the target-orientation rule it explicitly grants; it MUST NOT bypass unrelated restrictions such as wrong controller, invalid target zone, Rush timing or an action restriction.
+For `DECLARE_ATTACK`, `subject` identifies the attacking card and `target` identifies the target card. `DECLARE_ATTACK` is a general permission to declare an attack.
 
-Example:
+For `ATTACK_ACTIVE_CHARACTER`, `subject` identifies the attacking card and `target` identifies the opponent's active Character(s). A permission with this action MUST declare a `target` selector; the compiler MUST reject a permission that omits it. It overrides exclusively the `TARGET_NOT_RESTED` restriction for a matching target. It MUST NOT allow attacks against own cards, ignore zone restrictions, bypass Rush timing, or ignore any other applicable restriction.
+
+Example: permission to attack opponent's active Characters:
 
 ```toml
 { kind = "PERMISSION", permission = {
-  action = "DECLARE_ATTACK",
+  action = "ATTACK_ACTIVE_CHARACTER",
   subject = { same_as_source = true },
   target = { owner = "OPPONENT", categories = ["CHARACTER"], zones = ["CHARACTER"], orientation = "ACTIVE" }
 } }
@@ -1052,7 +1057,7 @@ Select the target cards into a variable and use `RETURN_CARDS_TO_OWNER_HAND`. Do
 
 ### 17.9 Attack active Characters
 
-Use a `PERMISSION` modifier with `action = "DECLARE_ATTACK"`, `subject` identifying the attacker, and `target` identifying only the opponent's active Characters. The runtime may override only the “target must be rested” restriction for a matching target.
+Use a `PERMISSION` modifier with `action = "ATTACK_ACTIVE_CHARACTER"`, `subject` identifying the attacker, and `target` identifying only the opponent's active Characters. A permission with this action MUST declare a `target` selector. This permission overrides exclusively the `TARGET_NOT_RESTED` restriction for a matching target. It MUST NOT allow attacks against own cards, ignore zone restrictions, bypass Rush timing, or ignore any other applicable restriction.
 
 ### 17.10 Battle K.O. protection
 

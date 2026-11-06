@@ -353,7 +353,7 @@ internal class TurnController {
 
 internal class MainPhaseController {
 
-  private companion object {
+  companion object {
     const val MAX_CHARACTERS = 5
   }
 
@@ -396,8 +396,7 @@ internal class MainPhaseController {
     }
     when (def.category) {
       CardCategory.LEADER -> violations += RuleViolation(
-        "CANNOT_PLAY_LEADER",
-        "Leader cannot be played during the game"
+        "CANNOT_PLAY_LEADER", "Leader cannot be played during the game"
       )
 
       CardCategory.CHARACTER -> if (player != null && player.characters.cards.size >= MAX_CHARACTERS) {
@@ -430,7 +429,7 @@ internal class MainPhaseController {
     return payment.takeIf { payment.size >= effectiveCost }
   }
 
-  private fun isCounterOnlyEvent(def: CardDefinition): Boolean {
+  fun isCounterOnlyEvent(def: CardDefinition): Boolean {
     val timings = def.abilities.filterIsInstance<ActivatedAbilityDefinition>().map { it.timing }
     return ActivationTiming.COUNTER_STEP in timings && ActivationTiming.ACTIVATE_MAIN !in timings
   }
@@ -501,7 +500,8 @@ internal class MainPhaseController {
           ),
           visibility = EventVisibility.PUBLIC,
         )
-        val programs = abilityPrograms(state, command, def, setOf(ActivationTiming.ON_PLAY), events.last())
+        val programs =
+          abilityPrograms(state, command.cardId, command.playerId, def, setOf(ActivationTiming.ON_PLAY), events.last())
         return GameTransition(events, programs)
       }
 
@@ -563,7 +563,8 @@ internal class MainPhaseController {
           ),
           visibility = EventVisibility.PUBLIC,
         )
-        val programs = abilityPrograms(state, command, def, setOf(ActivationTiming.ON_PLAY), events.last())
+        val programs =
+          abilityPrograms(state, command.cardId, command.playerId, def, setOf(ActivationTiming.ON_PLAY), events.last())
         return GameTransition(events, programs)
       }
 
@@ -609,7 +610,14 @@ internal class MainPhaseController {
           payload = GameEventPayload.CardActivatedPayload(command.cardId, command.playerId),
           visibility = EventVisibility.PUBLIC,
         )
-        val programs = abilityPrograms(state, command, def, setOf(ActivationTiming.ACTIVATE_MAIN), events.last())
+        val programs = abilityPrograms(
+          state,
+          command.cardId,
+          command.playerId,
+          def,
+          setOf(ActivationTiming.ACTIVATE_MAIN),
+          events.last()
+        )
         return GameTransition(events, programs)
       }
 
@@ -617,28 +625,29 @@ internal class MainPhaseController {
     }
   }
 
-  private fun abilityPrograms(
+  fun abilityPrograms(
     state: GameState,
-    command: PlayCardCommand,
+    cardId: CardInstanceId,
+    playerId: PlayerId,
     def: CardDefinition,
     timings: Set<ActivationTiming>,
     triggeringEvent: GameEvent,
   ): List<ProgramRequest> {
     return def.abilities.filterIsInstance<ActivatedAbilityDefinition>().filter { it.timing in timings }.map { ability ->
-        ProgramRequest(
-          executionId = ExecutionId(
-            "${state.id.value}:play:${command.cardId.value}:${ability.id.value}:${triggeringEvent.sequence}"
-          ),
-          program = ability.program,
-          context = EffectContext(
-            gameId = state.id,
-            controllerId = command.playerId,
-            sourceCardId = command.cardId,
-            abilityId = ability.id,
-            triggeringEvent = triggeringEvent,
-          ),
-        )
-      }
+      ProgramRequest(
+        executionId = ExecutionId(
+          "${state.id.value}:play:${cardId.value}:${ability.id.value}:${triggeringEvent.sequence}"
+        ),
+        program = ability.program,
+        context = EffectContext(
+          gameId = state.id,
+          controllerId = playerId,
+          sourceCardId = cardId,
+          abilityId = ability.id,
+          triggeringEvent = triggeringEvent,
+        ),
+      )
+    }
   }
 
   private fun emptyTransition(): GameTransition = GameTransition(emptyList(), emptyList())

@@ -152,9 +152,19 @@ data class EffectContext(
 )
 
 @Serializable
+enum class PlayFromZone(val zone: ZoneType) {
+  HAND(ZoneType.HAND), DECK(ZoneType.DECK), TRASH(ZoneType.TRASH), LIFE(ZoneType.LIFE),
+}
+
+@Serializable
+enum class PlayOrientation {
+  ACTIVE, RESTED,
+}
+
+@Serializable
 data class PlayPayment(
-  val restedDonIds: List<CardInstanceId>,
-  val additionalCosts: List<Cost>,
+  val restedDon: VariableId? = null,
+  val additionalCosts: List<Cost> = emptyList(),
 )
 
 @Serializable
@@ -259,9 +269,11 @@ data class KnockOut(
 
 @Serializable
 data class PlayCard(
-  val cardId: CardInstanceId,
-  val playerId: PlayerId,
-  val payment: PlayPayment,
+  val card: CardReference,
+  val fromZone: PlayFromZone,
+  val controller: PlayerRelation,
+  val payment: PlayPayment = PlayPayment(),
+  val orientation: PlayOrientation? = null,
 ) : Instruction
 
 @Serializable

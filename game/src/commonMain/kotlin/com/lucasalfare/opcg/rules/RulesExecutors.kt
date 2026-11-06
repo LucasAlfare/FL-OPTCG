@@ -4,6 +4,8 @@ import com.lucasalfare.opcg.*
 
 internal class ZoneInstructionExecutor {
 
+  private val costResolver = CostResolver()
+
   fun draw(
     state: GameState,
     instruction: Draw,
@@ -274,15 +276,172 @@ internal class ZoneInstructionExecutor {
     variables: Map<VariableId, StoredValue>,
     catalog: CardCatalog,
     continuous: ContinuousEffectProcessor,
-    costProcessor: CostProcessor,
     engine: RulesEngine,
   ): InstructionExecutionResult {
-    val command = PlayCardCommand(instruction.playerId, instruction.cardId)
-    val transition = MainPhaseController().processPlayCard(
-      state, command, catalog, continuous, costProcessor, engine,
+    val cardId = when (val resolved = engine.resolveCardForPlay(instruction.card, state, context, variables)) {
+      is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(resolved.error)
+      is EvaluationResult.Success -> resolved.value
+    }
+    val card = state.cards[cardId] ?: return fail("UNKNOWN_CARD", "Card not found")
+    val (holderId, holderZone) = locateCard(state, cardId) ?: return fail(
+      "CARD_NOT_LOCATED", "Card is not in any zone",
     )
-    if (transition.events.isEmpty()) return fail("PLAY_REJECTED", "Card cannot be played")
-    return InstructionExecutionResult.Completed(null, transition.events, transition.programsToRun)
+    if (holderZone != instruction.fromZone.zone) {
+      return fail("CARD_NOT_IN_FROM_ZONE", "Card is in $holderZone, expected ${instruction.fromZone.zone}")
+    }
+    val controllerId = engine.resolvePlayer(instruction.controller, state, context) ?: return fail(
+      "UNKNOWN_PLAYER", "Controller reference did not resolve",
+    )
+    val player = state.players[controllerId] ?: return fail("UNKNOWN_PLAYER", "Player not found")
+    if (continuous.isActionRestricted(state, RuleAction.PLAY_CARD, cardId).isNotEmpty()) {
+      return fail("RESTRICTED_ACTION", "Card play is restricted by a continuous effect")
+    }
+    val def = catalog.get(card.definitionId) ?: return fail("UNKNOWN_DEFINITION", "Card definition missing")
+    val mainPhase = MainPhaseController()
+
+    val orientation = when (def.category) {
+      CardCategory.CHARACTER, CardCategory.STAGE -> when (instruction.orientation) {
+        null, PlayOrientation.ACTIVE -> CardOrientation.ACTIVE
+        PlayOrientation.RESTED -> CardOrientation.RESTED
+      }
+
+      CardCategory.EVENT -> {
+        if (instruction.orientation != null) return fail("INVALID_ORIENTATION", "Event cannot declare an orientation")
+        if (mainPhase.isCounterOnlyEvent(def)) {
+          return fail("COUNTER_EVENT_NOT_PLAYABLE", "Counter event cannot be played by effect")
+        }
+        CardOrientation.NOT_APPLICABLE
+      }
+
+      CardCategory.LEADER -> return fail("CANNOT_PLAY_LEADER", "Leader cannot be played by effect")
+      CardCategory.DON -> return fail("INVALID_CATEGORY", "DON!! cannot be played by effect")
+    }
+
+    if (def.category == CardCategory.CHARACTER && player.characters.cards.size >= MainPhaseController.MAX_CHARACTERS) {
+      return fail("CHARACTER_LIMIT", "Character area already has ${MainPhaseController.MAX_CHARACTERS} characters")
+    }
+
+    val restedDonIds = when (val variable = instruction.payment.restedDon) {
+      null -> emptyList<CardInstanceId>()
+      else -> when (val value = variables[variable]) {
+        is StoredValue.CardIdsValue -> value.value
+        is StoredValue.CardValue -> listOf(value.value)
+        null -> return fail("MISSING_VARIABLE", "DON!! payment variable not found: ${variable.value}")
+        else -> return fail("INVALID_SOURCE", "DON!! payment must reference card ids")
+      }
+    }
+    if (restedDonIds.toSet().size != restedDonIds.size) {
+      return fail("DUPLICATE_CARDS", "DON!! payment contains duplicate cards")
+    }
+    for (donId in restedDonIds) {
+      if (donId !in player.cost.cards) return fail("DON_NOT_IN_COST", "DON!! must be in the controller's Cost area")
+      if (state.cards[donId]?.orientation != CardOrientation.ACTIVE) {
+        return fail("DON_NOT_ACTIVE", "DON!! must be active to be rested")
+      }
+    }
+
+    val additionalCosts = instruction.payment.additionalCosts
+    val costPayments = if (additionalCosts.isEmpty()) {
+      emptyList<CostPayment>()
+    } else {
+      costResolver.preview(state, controllerId, Cost.CombinedCost(additionalCosts), cardId, engine)
+        ?: return fail("COST_NOT_PAYABLE", "Additional costs cannot be paid")
+    }
+    val donUsedByCosts = costPayments.flatMap { payment ->
+      when (payment) {
+        is CostPayment.RestDon -> payment.donIds
+        is CostPayment.ReturnDon -> payment.donIds
+        else -> emptyList<CardInstanceId>()
+      }
+    }
+    if (donUsedByCosts.any { it in restedDonIds }) {
+      return fail("DON_PAYMENT_CONFLICT", "Additional costs and rested DON!! reference the same DON!!")
+    }
+
+    val events = mutableListOf<GameEvent>()
+    events += costResolver.events(state, controllerId, costPayments)
+    var seq = events.lastOrNull()?.sequence ?: state.lastEventSequence
+
+    if (restedDonIds.isNotEmpty()) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.DON_RESTED,
+        sourceCardId = null,
+        payload = GameEventPayload.DonRestedPayload(controllerId, restedDonIds),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+    if (holderZone == ZoneType.DECK || holderZone == ZoneType.LIFE) {
+      seq += 1
+      events += GameEvent(
+        id = EventId("${state.id.value}:$seq"),
+        sequence = seq,
+        type = GameEventType.CARD_REVEALED,
+        sourceCardId = cardId,
+        payload = GameEventPayload.CardRevealedPayload(listOf(cardId), CardVisibility.PUBLIC),
+        visibility = EventVisibility.PUBLIC,
+      )
+    }
+
+    when (def.category) {
+      CardCategory.CHARACTER -> {
+        seq += 1
+        events += cardMovedEvent(
+          state, seq, cardId, holderId, holderZone, controllerId, ZoneType.CHARACTER, orientation,
+        )
+        seq += 1
+        events += cardPlayedEvent(state, seq, cardId, controllerId, holderZone, ZoneType.CHARACTER)
+        val programs = mainPhase.abilityPrograms(
+          state, cardId, controllerId, def, setOf(ActivationTiming.ON_PLAY), events.last(),
+        )
+        return InstructionExecutionResult.Completed(null, events, programs)
+      }
+
+      CardCategory.STAGE -> {
+        val previousStage = player.stage.cards.firstOrNull()
+        if (previousStage != null) {
+          seq += 1
+          events += cardMovedEvent(
+            state, seq, previousStage, controllerId, ZoneType.STAGE,
+            state.cards[previousStage]?.ownerId ?: controllerId, ZoneType.TRASH, CardOrientation.NOT_APPLICABLE,
+          )
+        }
+        seq += 1
+        events += cardMovedEvent(
+          state, seq, cardId, holderId, holderZone, controllerId, ZoneType.STAGE, orientation,
+        )
+        seq += 1
+        events += cardPlayedEvent(state, seq, cardId, controllerId, holderZone, ZoneType.STAGE)
+        val programs = mainPhase.abilityPrograms(
+          state, cardId, controllerId, def, setOf(ActivationTiming.ON_PLAY), events.last(),
+        )
+        return InstructionExecutionResult.Completed(null, events, programs)
+      }
+
+      CardCategory.EVENT -> {
+        seq += 1
+        events += cardMovedEvent(
+          state, seq, cardId, holderId, holderZone, card.ownerId, ZoneType.TRASH, orientation,
+        )
+        seq += 1
+        events += GameEvent(
+          id = EventId("${state.id.value}:$seq"),
+          sequence = seq,
+          type = GameEventType.CARD_ACTIVATED,
+          sourceCardId = cardId,
+          payload = GameEventPayload.CardActivatedPayload(cardId, controllerId),
+          visibility = EventVisibility.PUBLIC,
+        )
+        val programs = mainPhase.abilityPrograms(
+          state, cardId, controllerId, def, setOf(ActivationTiming.ACTIVATE_MAIN), events.last(),
+        )
+        return InstructionExecutionResult.Completed(null, events, programs)
+      }
+
+      else -> return fail("INVALID_CATEGORY", "Category ${def.category} cannot be played by effect")
+    }
   }
 
   fun shuffleZone(state: GameState, instruction: ShuffleZone): InstructionExecutionResult {
@@ -366,6 +525,56 @@ internal class ZoneInstructionExecutor {
     val ownerId: PlayerId,
     val fromPlayerId: PlayerId,
     val fromZone: ZoneType,
+  )
+
+  private fun cardMovedEvent(
+    state: GameState,
+    sequence: Long,
+    cardId: CardInstanceId,
+    fromPlayerId: PlayerId,
+    fromZone: ZoneType,
+    toPlayerId: PlayerId,
+    toZone: ZoneType,
+    orientation: CardOrientation,
+  ): GameEvent = GameEvent(
+    id = EventId("${state.id.value}:$sequence"),
+    sequence = sequence,
+    type = GameEventType.CARD_MOVED,
+    sourceCardId = cardId,
+    payload = GameEventPayload.CardMovedPayload(
+      cardId = cardId,
+      fromPlayerId = fromPlayerId,
+      fromZone = fromZone,
+      toPlayerId = toPlayerId,
+      toZone = toZone,
+      destinationIndex = null,
+      newObjectId = null,
+      orientation = orientation,
+      faceState = FaceState.FACE_UP,
+      visibility = CardVisibility.PUBLIC,
+    ),
+    visibility = EventVisibility.PUBLIC,
+  )
+
+  private fun cardPlayedEvent(
+    state: GameState,
+    sequence: Long,
+    cardId: CardInstanceId,
+    playerId: PlayerId,
+    fromZone: ZoneType,
+    toZone: ZoneType,
+  ): GameEvent = GameEvent(
+    id = EventId("${state.id.value}:$sequence"),
+    sequence = sequence,
+    type = GameEventType.CARD_PLAYED,
+    sourceCardId = cardId,
+    payload = GameEventPayload.CardPlayedPayload(
+      cardId = cardId,
+      playerId = playerId,
+      fromZone = fromZone,
+      toZone = toZone,
+    ),
+    visibility = EventVisibility.PUBLIC,
   )
 
   private fun sourceCards(source: VariableId, variables: Map<VariableId, StoredValue>): List<CardInstanceId>? {

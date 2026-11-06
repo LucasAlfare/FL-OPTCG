@@ -194,6 +194,15 @@ class CardProgramValidator {
       is KnockOut -> emptyList()
       is PlayCard -> {
         val issues = mutableListOf<ProgramValidationIssue>()
+        issues += validateCardReference(instruction.card, path)
+        if (instruction.card.currentCard) {
+          issues += ProgramValidationIssue(
+            "INVALID_PLAY_REFERENCE",
+            "PLAY_CARD cannot reference CURRENT_CARD outside a selector",
+            path,
+          )
+        }
+        instruction.payment.restedDon?.let { issues += validateVariableId(it, path) }
         instruction.payment.additionalCosts.forEachIndexed { i, cost -> issues += validateCost(cost, path + i) }
         issues
       }

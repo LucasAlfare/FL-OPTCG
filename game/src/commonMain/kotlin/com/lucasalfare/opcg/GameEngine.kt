@@ -251,6 +251,7 @@ class GameStateReducer : EventApplier {
         faceState = payload.faceState,
         visibility = payload.visibility,
         enteredPlayTurn = newEnteredPlayTurn,
+        controllerId = if (payload.toZone == ZoneType.ATTACHED_DON) card.controllerId else payload.toPlayerId,
       ))
     } ?: state.cards
 

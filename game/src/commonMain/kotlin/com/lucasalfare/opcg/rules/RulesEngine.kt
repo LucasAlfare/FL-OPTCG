@@ -189,6 +189,16 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   fun selectCardIds(selector: CardSelector, state: GameState, context: EffectContext): List<CardInstanceId>? =
     (selectCards(selector, state, context, emptyMap()) as? EvaluationResult.Success)?.value
 
+  fun resolveCardForPlay(
+    reference: CardReference,
+    state: GameState,
+    context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): EvaluationResult<CardInstanceId> = resolveSingleCard(state, reference, variables, context, null)
+
+  fun resolvePlayer(relation: PlayerRelation, state: GameState, context: EffectContext): PlayerId? =
+    resolvePlayerRelation(relation, state, context)
+
   fun stateSignature(state: GameState): String = loopProcessor.signatureOf(state)
 
   fun resolveRepeatedState(state: GameState, seenSignatures: Collection<String>): GameTransition? {
@@ -510,7 +520,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
 
       is TrashFromHand -> zoneInstructionExecutor.trashFromHand(state, instruction, context, variables, this)
       is PlayCard -> zoneInstructionExecutor.playCard(
-        state, instruction, context, variables, cardCatalog, continuousEffectProcessor, costProcessor, this,
+        state, instruction, context, variables, cardCatalog, continuousEffectProcessor, this,
       )
 
       is ShuffleZone -> zoneInstructionExecutor.shuffleZone(state, instruction)
