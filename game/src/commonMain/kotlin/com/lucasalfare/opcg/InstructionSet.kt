@@ -2,6 +2,7 @@
 
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 val SOURCE_CARD: VariableId = VariableId("SOURCE_CARD")
@@ -87,6 +88,8 @@ data class CardSelector(
   val keywords: Set<KeywordEffect> = emptySet(),
   val name: String? = null,
   val orientation: CardOrientation? = null,
+  @SerialName("same_as_source") val sameAsSource: Boolean = false,
+  @SerialName("exclude_source") val excludeSource: Boolean = false,
   val conditions: List<Condition> = emptyList(),
 )
 

@@ -1236,6 +1236,8 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   ): Boolean {
     val instance = state.cards[cardId] ?: return false
     val definition = cardCatalog.get(instance.definitionId) ?: return false
+    if (selector.sameAsSource && context.sourceCardId != cardId) return false
+    if (selector.excludeSource && context.sourceCardId == cardId) return false
     if (selector.orientation != null && instance.orientation != selector.orientation) return false
     if (selector.owner != null) {
       val expected = resolvePlayerRelation(selector.owner, state, context) ?: return false

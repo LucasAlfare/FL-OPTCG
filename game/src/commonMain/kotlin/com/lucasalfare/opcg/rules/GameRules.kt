@@ -1614,13 +1614,7 @@ internal class EffectScheduler(
     if (pattern.source != null) {
       val sourceId = event.sourceCardId ?: return false
       if (!cardMatchesSelector(
-          pattern.source,
-          state,
-          sourceId,
-          controllerId,
-          evaluator,
-          event,
-          sourceCardId
+          pattern.source, state, sourceId, controllerId, evaluator, event, sourceCardId
         )
       ) return false
     }
@@ -1660,6 +1654,10 @@ internal class EffectScheduler(
     val instance = state.cards[cardId] ?: return false
     val definition = cardCatalog.get(instance.definitionId) ?: return false
 
+    if (selector.sameAsSource && abilitySourceCardId != cardId) return false
+    if (selector.excludeSource && abilitySourceCardId == cardId) return false
+    if (selector.orientation != null && instance.orientation != selector.orientation) return false
+
     if (selector.zones.isNotEmpty()) {
       val zone = zoneOf(state, cardId) ?: return false
       if (zone !in selector.zones) return false
@@ -1680,6 +1678,7 @@ internal class EffectScheduler(
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
+    if (selector.keywords.isNotEmpty() && selector.keywords.none { it in effective.keywords }) return false
 
     if (selector.conditions.isNotEmpty()) {
       val ctx = EffectContext(

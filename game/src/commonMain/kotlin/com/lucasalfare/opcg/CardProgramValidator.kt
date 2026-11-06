@@ -314,6 +314,13 @@ class CardProgramValidator {
 
   private fun validateSelector(selector: CardSelector, path: List<Int>): List<ProgramValidationIssue> {
     val issues = mutableListOf<ProgramValidationIssue>()
+    if (selector.sameAsSource && selector.excludeSource) {
+      issues += ProgramValidationIssue(
+        "CONFLICTING_SOURCE_FILTER",
+        "CardSelector cannot set both sameAsSource and excludeSource",
+        path,
+      )
+    }
     if (selector.orientation == CardOrientation.NOT_APPLICABLE) {
       issues += ProgramValidationIssue(
         "INVALID_ORIENTATION_FILTER",
