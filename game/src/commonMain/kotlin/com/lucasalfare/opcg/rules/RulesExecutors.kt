@@ -6,6 +6,17 @@ internal class ZoneInstructionExecutor {
 
   private val costResolver = CostResolver()
 
+  fun selectAllCards(
+    state: GameState,
+    instruction: SelectAllCards,
+    context: EffectContext,
+    evaluator: RulesEngine,
+  ): InstructionExecutionResult {
+    val matched = evaluator.selectCardIds(instruction.selector, state, context)
+      ?: return fail("SELECTOR_ERROR", "Failed to evaluate card selector")
+    return InstructionExecutionResult.Completed(StoredValue.CardIdsValue(matched), emptyList())
+  }
+
   fun draw(
     state: GameState,
     instruction: Draw,

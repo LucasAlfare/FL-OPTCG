@@ -186,6 +186,12 @@ data class SelectCards(
 ) : Instruction
 
 @Serializable
+data class SelectAllCards(
+  val selector: CardSelector,
+  val destination: VariableId,
+) : Instruction
+
+@Serializable
 data class SelectFromVariable(
   val source: VariableId,
   val selector: CardSelector,

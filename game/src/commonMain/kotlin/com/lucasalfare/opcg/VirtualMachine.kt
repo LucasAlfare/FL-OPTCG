@@ -433,6 +433,7 @@ class VirtualMachine(
 
   private fun destinationOf(instruction: Instruction): VariableId? = when (instruction) {
     is SelectCards -> instruction.destination
+    is SelectAllCards -> instruction.destination
     is CountCards -> instruction.destination
     is LookAtTop -> instruction.destination
     is ChooseOption -> instruction.destination

@@ -108,6 +108,8 @@ class CardProgramValidator {
         issues
       }
 
+      is SelectAllCards -> validateSelector(instruction.selector, path)
+
       is SelectFromVariable -> {
         val issues = validateSelector(instruction.selector, path).toMutableList()
         issues += validateNumericBounds(instruction.minimum, instruction.maximum, path)

@@ -534,6 +534,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is SetCardState -> zoneInstructionExecutor.setCardState(state, instruction, context, variables)
       is ActivateAbility -> effectScheduler.executeActivateInstruction(state, instruction, context, variables, this)
       is SelectCards -> executeSelectCards(state, instruction, context, variables)
+      is SelectAllCards -> zoneInstructionExecutor.selectAllCards(state, instruction, context, this)
       is SelectFromVariable -> executeSelectFromVariable(state, instruction, context, variables)
       is CountCards -> executeCountCards(state, instruction, context, variables)
       is LookAtTop -> executeLookAtTop(state, instruction, context, variables)
