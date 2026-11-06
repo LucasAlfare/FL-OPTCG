@@ -84,6 +84,7 @@ data class CardSelector(
   val colors: Set<CardColor> = emptySet(),
   val types: Set<String> = emptySet(),
   val attributes: Set<CardAttribute> = emptySet(),
+  val keywords: Set<KeywordEffect> = emptySet(),
   val name: String? = null,
   val orientation: CardOrientation? = null,
   val conditions: List<Condition> = emptyList(),

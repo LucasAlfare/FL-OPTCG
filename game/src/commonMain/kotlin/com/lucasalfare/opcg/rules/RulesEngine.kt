@@ -1252,6 +1252,7 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
+    if (selector.keywords.isNotEmpty() && selector.keywords.none { it in effective.keywords }) return false
     return true
   }
 
