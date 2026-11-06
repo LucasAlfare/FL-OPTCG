@@ -95,6 +95,7 @@ data class CardSelector(
   val attributes: Set<CardAttribute> = emptySet(),
   val keywords: Set<KeywordEffect> = emptySet(),
   val name: String? = null,
+  val excludedNames: Set<String> = emptySet(),
   val orientation: CardOrientation? = null,
   @SerialName("same_as_source") val sameAsSource: Boolean = false,
   @SerialName("exclude_source") val excludeSource: Boolean = false,

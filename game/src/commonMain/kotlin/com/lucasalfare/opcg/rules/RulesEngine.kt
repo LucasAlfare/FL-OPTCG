@@ -795,14 +795,10 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is EvaluationResult.Success -> r.value
     }
     val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: return failExec(
-      "INVALID_RANGE",
-      "SelectFromVariable minimum must evaluate to an integer",
-      0
+      "INVALID_RANGE", "SelectFromVariable minimum must evaluate to an integer", 0
     )
     val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: return failExec(
-      "INVALID_RANGE",
-      "SelectFromVariable maximum must evaluate to an integer",
-      0
+      "INVALID_RANGE", "SelectFromVariable maximum must evaluate to an integer", 0
     )
     if (minVal < 0 || maxVal < minVal) {
       return failExec("INVALID_RANGE", "Selection range $minVal..$maxVal is invalid", 0)
@@ -1473,10 +1469,11 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     }
     if (selector.categories.isNotEmpty() && definition.category !in selector.categories) return false
     val needsCharacteristics =
-      selector.name != null || selector.colors.isNotEmpty() || selector.types.isNotEmpty() || selector.attributes.isNotEmpty() || selector.keywords.isNotEmpty()
+      selector.name != null || selector.excludedNames.isNotEmpty() || selector.colors.isNotEmpty() || selector.types.isNotEmpty() || selector.attributes.isNotEmpty() || selector.keywords.isNotEmpty()
     if (!needsCharacteristics) return true
     val effective = continuousEffectProcessor.effectiveCharacteristics(state, cardId) ?: return false
     if (selector.name != null && !effective.answersToName(selector.name)) return false
+    if (selector.excludedNames.any { effective.answersToName(it) }) return false
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
