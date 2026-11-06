@@ -75,19 +75,25 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     else -> null
   }
 
+  private fun targetOf(command: GameCommand): CardInstanceId? = when (command) {
+    is DeclareAttackCommand -> (command.targetId as? BattleTarget.CardTarget)?.cardInstanceId
+    else -> null
+  }
+
   private fun applyRuleModifiers(
     state: GameState,
     command: GameCommand,
     base: ValidationResult,
   ): ValidationResult {
     val (action, subject) = actionOf(command) ?: return base
+    val target = targetOf(command)
 
-    val restrictions = continuousEffectProcessor.isActionRestricted(state, action, subject)
+    val restrictions = continuousEffectProcessor.isActionRestricted(state, action, subject, target)
     if (restrictions.isNotEmpty()) {
       return ValidationResult(false, base.violations + restrictions)
     }
 
-    if (!base.valid && continuousEffectProcessor.hasPermissionFor(state, action, subject)) {
+    if (!base.valid && continuousEffectProcessor.hasPermissionFor(state, action, subject, target)) {
       val overridable = setOf(
         "NOT_MAIN_PHASE",
         "FIRST_TURN",

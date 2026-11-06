@@ -581,7 +581,10 @@ internal class BattleResolver(
     continuous: ContinuousEffectProcessor,
   ): ValidationResult {
     val violations = mutableListOf<RuleViolation>()
-    val restrictions = continuous.isActionRestricted(state, RuleAction.DECLARE_ATTACK, command.attackerId)
+    val targetCardId = (command.targetId as? BattleTarget.CardTarget)?.cardInstanceId
+    val restrictions = continuous.isActionRestricted(
+      state, RuleAction.DECLARE_ATTACK, command.attackerId, targetCardId,
+    )
     if (restrictions.isNotEmpty()) {
       return ValidationResult(false, restrictions)
     }

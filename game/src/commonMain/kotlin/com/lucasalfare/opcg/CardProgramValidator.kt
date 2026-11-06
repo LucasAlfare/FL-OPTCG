@@ -365,6 +365,7 @@ class CardProgramValidator {
   private fun validateRuleRestriction(restriction: RuleRestriction, path: List<Int>): List<ProgramValidationIssue> {
     val issues = mutableListOf<ProgramValidationIssue>()
     restriction.subject?.let { issues += validateSelector(it, path) }
+    restriction.target?.let { issues += validateSelector(it, path) }
     restriction.source?.let { issues += validateSelector(it, path) }
     restriction.maximumUses?.let { issues += validateValue(it, path) }
     restriction.condition?.let { issues += validateCondition(it, path) }

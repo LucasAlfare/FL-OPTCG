@@ -103,6 +103,7 @@ val ACTIONS_REQUIRING_PERMISSION_TARGET: Set<RuleAction> = setOf(RuleAction.ATTA
 data class RuleRestriction(
   val action: RuleAction,
   val subject: CardSelector? = null,
+  val target: CardSelector? = null,
   val maximumUses: ValueExpr? = null,
   val condition: Condition? = null,
   val cause: KnockOutCause? = null,

@@ -942,6 +942,7 @@ internal class ContinuousEffectProcessor(
     state: GameState,
     action: RuleAction,
     subjectCardId: CardInstanceId?,
+    targetCardId: CardInstanceId? = null,
   ): List<RuleViolation> {
     val violations = mutableListOf<RuleViolation>()
     for (effect in state.activeEffects) {
@@ -950,6 +951,7 @@ internal class ContinuousEffectProcessor(
       val restriction = modifier.restriction
       if (restriction.action != action) continue
       if (!selectorMatches(state, effect, restriction.subject, subjectCardId)) continue
+      if (!selectorMatches(state, effect, restriction.target, targetCardId)) continue
       if (!conditionHolds(state, effect, restriction.condition)) continue
       violations += RuleViolation("RESTRICTED_ACTION", "Action is restricted by continuous effect")
     }
