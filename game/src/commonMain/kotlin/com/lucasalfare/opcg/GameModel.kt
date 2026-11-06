@@ -410,7 +410,10 @@ data class EffectiveCharacteristics(
   val attributes: Set<CardAttribute>, val cost: Int?, val power: Int?,
   val life: Int?, val counter: Int?, val keywords: Set<KeywordEffect>,
   val attachedDonCount: Int,
-)
+  val aliases: Set<String> = emptySet(),
+) {
+  fun answersToName(name: String): Boolean = this.name == name || name in aliases
+}
 
 interface CardCatalog {
   val version: String

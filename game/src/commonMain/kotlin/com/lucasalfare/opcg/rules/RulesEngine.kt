@@ -21,6 +21,14 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   private val donInstructionExecutor = DonInstructionExecutor()
 
   fun validate(state: GameState, command: GameCommand): ValidationResult {
+    return try {
+      validateUnchecked(state, command)
+    } catch (exception: DynamicModifierException) {
+      ValidationResult(false, listOf(RuleViolation(exception.code, exception.message.orEmpty())))
+    }
+  }
+
+  private fun validateUnchecked(state: GameState, command: GameCommand): ValidationResult {
     if (state.status == GameStatus.FINISHED) {
       return ValidationResult(false, listOf(RuleViolation("GAME_FINISHED", "Game is finished")))
     }
@@ -189,6 +197,17 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   }
 
   override fun execute(
+    instruction: Instruction, state: GameState, context: EffectContext,
+    variables: Map<VariableId, StoredValue>,
+  ): InstructionExecutionResult {
+    return try {
+      executeUnchecked(instruction, state, context, variables)
+    } catch (exception: DynamicModifierException) {
+      InstructionExecutionResult.Failed(VmError(exception.code, exception.message.orEmpty(), 0))
+    }
+  }
+
+  private fun executeUnchecked(
     instruction: Instruction, state: GameState, context: EffectContext,
     variables: Map<VariableId, StoredValue>,
   ): InstructionExecutionResult {
@@ -765,10 +784,16 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       is EvaluationResult.Failed -> return InstructionExecutionResult.Failed(r.error)
       is EvaluationResult.Success -> r.value
     }
-    val minVal = evaluateInt(instruction.minimum, state, context, variables)
-      ?: return failExec("INVALID_RANGE", "SelectFromVariable minimum must evaluate to an integer", 0)
-    val maxVal = evaluateInt(instruction.maximum, state, context, variables)
-      ?: return failExec("INVALID_RANGE", "SelectFromVariable maximum must evaluate to an integer", 0)
+    val minVal = evaluateInt(instruction.minimum, state, context, variables) ?: return failExec(
+      "INVALID_RANGE",
+      "SelectFromVariable minimum must evaluate to an integer",
+      0
+    )
+    val maxVal = evaluateInt(instruction.maximum, state, context, variables) ?: return failExec(
+      "INVALID_RANGE",
+      "SelectFromVariable maximum must evaluate to an integer",
+      0
+    )
     if (minVal < 0 || maxVal < minVal) {
       return failExec("INVALID_RANGE", "Selection range $minVal..$maxVal is invalid", 0)
     }
@@ -1069,6 +1094,17 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
     expression: ValueExpr, state: GameState, context: EffectContext,
     variables: Map<VariableId, StoredValue>, candidateCardId: CardInstanceId?,
   ): EvaluationResult<StoredValue> {
+    return try {
+      evaluateValueUnchecked(expression, state, context, variables, candidateCardId)
+    } catch (exception: DynamicModifierException) {
+      EvaluationResult.Failed(VmError(exception.code, exception.message.orEmpty(), 0))
+    }
+  }
+
+  private fun evaluateValueUnchecked(
+    expression: ValueExpr, state: GameState, context: EffectContext,
+    variables: Map<VariableId, StoredValue>, candidateCardId: CardInstanceId?,
+  ): EvaluationResult<StoredValue> {
     return when (expression) {
       is ValueExpr.NumberValue -> EvaluationResult.Success(StoredValue.IntegerValue(expression.value))
       is ValueExpr.VariableValue -> {
@@ -1128,10 +1164,11 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       }
 
       is ValueExpr.CardCharacteristic -> {
-        val cardId = resolveCardReference(expression.cardReference, variables, context, candidateCardId) ?: return evalFail(
-          "MISSING_CARD_REFERENCE",
-          "Card reference did not resolve to exactly one card",
-        )
+        val cardId =
+          resolveCardReference(expression.cardReference, variables, context, candidateCardId) ?: return evalFail(
+            "MISSING_CARD_REFERENCE",
+            "Card reference did not resolve to exactly one card",
+          )
         val value = readCharacteristic(state, cardId, expression.characteristic) ?: return evalFail(
           "MISSING_CHARACTERISTIC",
           "Characteristic ${expression.characteristic} unavailable for card ${cardId.value}",
@@ -1142,6 +1179,17 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
   }
 
   override fun evaluateCondition(
+    condition: Condition, state: GameState, context: EffectContext,
+    variables: Map<VariableId, StoredValue>, candidateCardId: CardInstanceId?,
+  ): EvaluationResult<Boolean> {
+    return try {
+      evaluateConditionUnchecked(condition, state, context, variables, candidateCardId)
+    } catch (exception: DynamicModifierException) {
+      EvaluationResult.Failed(VmError(exception.code, exception.message.orEmpty(), 0))
+    }
+  }
+
+  private fun evaluateConditionUnchecked(
     condition: Condition, state: GameState, context: EffectContext,
     variables: Map<VariableId, StoredValue>, candidateCardId: CardInstanceId?,
   ): EvaluationResult<Boolean> {
@@ -1414,8 +1462,11 @@ class RulesEngine(private val cardCatalog: CardCatalog) : InstructionExecutor, P
       if (controller != expected) return false
     }
     if (selector.categories.isNotEmpty() && definition.category !in selector.categories) return false
+    val needsCharacteristics =
+      selector.name != null || selector.colors.isNotEmpty() || selector.types.isNotEmpty() || selector.attributes.isNotEmpty() || selector.keywords.isNotEmpty()
+    if (!needsCharacteristics) return true
     val effective = continuousEffectProcessor.effectiveCharacteristics(state, cardId) ?: return false
-    if (selector.name != null && effective.name != selector.name) return false
+    if (selector.name != null && !effective.answersToName(selector.name)) return false
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false

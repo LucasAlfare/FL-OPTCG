@@ -57,6 +57,14 @@ class CardProgramValidator {
         val issues = mutableListOf<ProgramValidationIssue>()
         ability.condition?.let { issues += validateCondition(it, path) }
         ability.selector?.let { issues += validateSelector(it, path) }
+        val modifier = ability.modifier
+        if (modifier is Modifier.CharacteristicModifier && isUnresolvableInPermanentValue(modifier.value)) {
+          issues += ProgramValidationIssue(
+            "INVALID_PERMANENT_VALUE",
+            "Permanent modifier value can only use constants, selectors and SOURCE_CARD",
+            path,
+          )
+        }
         issues += validateModifier(ability.modifier, path, depth + 1)
         issues
       }
@@ -224,6 +232,7 @@ class CardProgramValidator {
         issues += validateDonSelector(instruction.selector, path)
         issues
       }
+
       is DetachDon -> validateValue(instruction.amount, path)
       is RestCards -> emptyList()
       is SetCardState -> emptyList()
@@ -365,6 +374,16 @@ class CardProgramValidator {
     return issues
   }
 
+  private fun isUnresolvableInPermanentValue(expr: ValueExpr): Boolean = when (expr) {
+    is ValueExpr.NumberValue, is ValueExpr.CountValue, is ValueExpr.CharacteristicValue -> false
+    is ValueExpr.VariableValue, is ValueExpr.CurrentCardValue -> true
+    is ValueExpr.ArithmeticValue -> isUnresolvableInPermanentValue(expr.left) || isUnresolvableInPermanentValue(expr.right)
+    is ValueExpr.CardCharacteristic -> {
+      val reference = expr.cardReference
+      reference.currentCard || (reference.variableId != null && reference.variableId != SOURCE_CARD)
+    }
+  }
+
   private fun validatePermission(permission: RulePermission, path: List<Int>): List<ProgramValidationIssue> {
     val issues = mutableListOf<ProgramValidationIssue>()
     permission.subject?.let { issues += validateSelector(it, path) }
@@ -385,8 +404,8 @@ class CardProgramValidator {
     path: List<Int>,
   ): List<ProgramValidationIssue> {
     val issues = mutableListOf<ProgramValidationIssue>()
-    val originCount = listOf(reference.instanceId != null, reference.variableId != null, reference.currentCard)
-      .count { it }
+    val originCount =
+      listOf(reference.instanceId != null, reference.variableId != null, reference.currentCard).count { it }
     if (originCount != 1) {
       issues += ProgramValidationIssue(
         "INVALID_CARD_REFERENCE",
@@ -503,6 +522,12 @@ class CardProgramValidator {
     return when (modifier) {
       is Modifier.CharacteristicModifier -> validateValue(modifier.value, path)
       is Modifier.PropertyModifier -> emptyList()
+      is Modifier.NameAliasModifier -> if (modifier.name.isBlank()) {
+        listOf(ProgramValidationIssue("INVALID_ALIAS", "Name alias must not be blank", path))
+      } else {
+        emptyList()
+      }
+
       is Modifier.KeywordModifier -> emptyList()
       is Modifier.ControlModifier -> emptyList()
       is Modifier.DamagePreventionModifier -> validateValue(modifier.amount, path)

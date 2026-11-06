@@ -733,10 +733,17 @@ internal class LoopProcessor {
   }
 }
 
+internal class DynamicModifierException(
+  val code: String,
+  message: String,
+) : RuntimeException(message)
+
 internal class ContinuousEffectProcessor(
   private val cardCatalog: CardCatalog,
   private val evaluator: RulesEngine,
 ) {
+
+  private val dynamicEvaluations = mutableSetOf<EffectId>()
 
   fun effectiveController(state: GameState, cardId: CardInstanceId): PlayerId? {
     val instance = state.cards[cardId] ?: return null
@@ -765,6 +772,7 @@ internal class ContinuousEffectProcessor(
     var counter = definition.counter
     var powerDelta = 0
     var costDelta = 0
+    val aliases = linkedSetOf<String>()
 
     val effects = state.activeEffects.filter { effect ->
       (effect.targetCardIds.isEmpty() || cardId in effect.targetCardIds) && isEffectActive(state, effect)
@@ -775,27 +783,29 @@ internal class ContinuousEffectProcessor(
         is Modifier.CharacteristicModifier -> {
           when (modifier.characteristic) {
             NumericCharacteristic.BASE_POWER -> {
-              basePower = applyNumeric(basePower, modifier.operation, constantValue(modifier.value))
+              basePower = applyNumeric(basePower, modifier.operation, modifierValue(state, effect, modifier.value))
             }
 
             NumericCharacteristic.BASE_COST -> {
-              baseCost = applyNumeric(baseCost, modifier.operation, constantValue(modifier.value))
+              baseCost = applyNumeric(baseCost, modifier.operation, modifierValue(state, effect, modifier.value))
             }
 
             NumericCharacteristic.POWER -> {
-              powerDelta = applyDelta(powerDelta, modifier.operation, constantValue(modifier.value), basePower)
+              powerDelta =
+                applyDelta(powerDelta, modifier.operation, modifierValue(state, effect, modifier.value), basePower)
             }
 
             NumericCharacteristic.COST -> {
-              costDelta = applyDelta(costDelta, modifier.operation, constantValue(modifier.value), baseCost)
+              costDelta =
+                applyDelta(costDelta, modifier.operation, modifierValue(state, effect, modifier.value), baseCost)
             }
 
             NumericCharacteristic.LIFE -> {
-              life = applyNumeric(life, modifier.operation, constantValue(modifier.value))
+              life = applyNumeric(life, modifier.operation, modifierValue(state, effect, modifier.value))
             }
 
             NumericCharacteristic.COUNTER -> {
-              counter = applyNumeric(counter, modifier.operation, constantValue(modifier.value))
+              counter = applyNumeric(counter, modifier.operation, modifierValue(state, effect, modifier.value))
             }
 
             NumericCharacteristic.ATTACHED_DON_COUNT -> Unit
@@ -826,6 +836,8 @@ internal class ContinuousEffectProcessor(
           }
         }
 
+        is Modifier.NameAliasModifier -> aliases += modifier.name
+
         else -> Unit
       }
     }
@@ -853,6 +865,7 @@ internal class ContinuousEffectProcessor(
       counter = counter,
       keywords = keywords,
       attachedDonCount = attachedDonCount,
+      aliases = aliases.toSet(),
     )
   }
 
@@ -862,8 +875,7 @@ internal class ContinuousEffectProcessor(
       is Duration.DuringBattle -> state.battle != null
       is Duration.WhileSourceValid -> isSourceValid(state, effect.sourceCardId)
       is Duration.WhileCondition -> isConditionSatisfied(state, effect, duration.condition)
-      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent,
-      is Duration.UntilEndOfNextOpponentTurn -> true
+      is Duration.UntilEndOfTurn, is Duration.UntilEndOfPhase, is Duration.UntilEvent, is Duration.UntilEndOfNextOpponentTurn -> true
     }
   }
 
@@ -1089,10 +1101,33 @@ internal class ContinuousEffectProcessor(
     return !(pattern.eventTypes.isNotEmpty() && event.type !in pattern.eventTypes)
   }
 
-  private fun constantValue(expr: ValueExpr): Int {
-    return when (expr) {
-      is ValueExpr.NumberValue -> expr.value
-      else -> 0
+  private fun modifierValue(state: GameState, effect: ActiveEffect, expression: ValueExpr): Int {
+    if (expression is ValueExpr.NumberValue) return expression.value
+    if (!dynamicEvaluations.add(effect.id)) {
+      throw DynamicModifierException(
+        "DYNAMIC_MODIFIER_CYCLE", "Cyclic dependency while evaluating modifier ${effect.id.value}",
+      )
+    }
+    try {
+      val context = EffectContext(
+        gameId = state.id,
+        controllerId = effect.controllerId,
+        sourceCardId = effect.sourceCardId,
+        abilityId = effect.sourceAbilityId,
+        triggeringEvent = null,
+      )
+      return when (val result = evaluator.evaluateValue(expression, state, context, emptyMap())) {
+        is EvaluationResult.Failed -> throw DynamicModifierException(
+          result.error.code, result.error.message,
+        )
+
+        is EvaluationResult.Success -> (result.value as? StoredValue.IntegerValue)?.value
+          ?: throw DynamicModifierException(
+            "DYNAMIC_MODIFIER_FAILED", "Modifier ${effect.id.value} did not evaluate to an integer",
+          )
+      }
+    } finally {
+      dynamicEvaluations.remove(effect.id)
     }
   }
 

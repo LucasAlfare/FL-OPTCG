@@ -1,5 +1,6 @@
 package com.lucasalfare.opcg
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -224,6 +225,12 @@ sealed class Modifier {
   @Serializable
   data class ReplacementModifier(
     val definition: ReplacementDefinition,
+  ) : Modifier()
+
+  @Serializable
+  @SerialName("NAME_ALIAS")
+  data class NameAliasModifier(
+    val name: String,
   ) : Modifier()
 
   @Serializable

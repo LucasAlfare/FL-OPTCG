@@ -1695,7 +1695,7 @@ internal class EffectScheduler(
       if (effective != expected) return false
     }
     val effective = evaluator.effectiveCharacteristics(state, cardId) ?: return false
-    if (selector.name != null && effective.name != selector.name) return false
+    if (selector.name != null && !effective.answersToName(selector.name)) return false
     if (selector.colors.isNotEmpty() && selector.colors.none { it in effective.colors }) return false
     if (selector.types.isNotEmpty() && selector.types.none { it in effective.types }) return false
     if (selector.attributes.isNotEmpty() && selector.attributes.none { it in effective.attributes }) return false
