@@ -27,6 +27,7 @@ enum class Attribute {
   RANGED,
   SPECIAL,
   WISDOM,
+  QUESTION_MARK,
 }
 
 @Serializable

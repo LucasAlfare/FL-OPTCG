@@ -1,6 +1,8 @@
 package com.lucasalfare.opcg.card
 
+import com.lucasalfare.opcg.core.Attribute
 import com.lucasalfare.opcg.core.CardId
+import com.lucasalfare.opcg.core.Color
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -9,15 +11,17 @@ data class CardDefinition(
   val number: String,
   val name: String,
   val category: CardCategory,
-  val colors: List<CardColor>,
+  val colors: List<Color>,
   val types: List<String> = emptyList(),
-  val attributes: List<CardAttribute>? = null,
+  val attributes: List<Attribute>? = null,
   val cost: Int? = null,
   val power: Int? = null,
   val life: Int? = null,
   val counter: Int? = null,
-  @SerialName("default_printing_id") val defaultPrintingId: String? = null,
-  @SerialName("printing_overrides") val printingOverrides: List<PrintingOverride> = emptyList(),
+  @SerialName("default_printing_id")
+  val defaultPrintingId: String? = null,
+  @SerialName("printing_overrides")
+  val printingOverrides: List<PrintingOverride> = emptyList(),
 ) {
 
   val id: CardId get() = CardId(number)
@@ -35,7 +39,8 @@ data class CardDefinition(
       counter = counter,
     )
     if (printingId == defaultPrintingId) return base
-    val override = printingOverrides.firstOrNull { it.printingId == printingId } ?: return base
+    val override = printingOverrides.firstOrNull { it.printingId == printingId }
+      ?: return base
     return base.copy(
       colors = override.colors ?: base.colors,
       types = override.types ?: base.types,
@@ -51,9 +56,9 @@ data class CardDefinition(
 data class CardCharacteristics(
   val name: String,
   val category: CardCategory,
-  val colors: List<CardColor>,
+  val colors: List<Color>,
   val types: List<String>,
-  val attributes: List<CardAttribute>?,
+  val attributes: List<Attribute>?,
   val cost: Int?,
   val power: Int?,
   val life: Int?,
@@ -61,7 +66,3 @@ data class CardCharacteristics(
 )
 
 enum class CardCategory { LEADER, CHARACTER, EVENT, STAGE, DON }
-
-enum class CardColor { RED, GREEN, BLUE, PURPLE, BLACK, YELLOW }
-
-enum class CardAttribute { SLASH, STRIKE, RANGED, SPECIAL, WISDOM, QUESTION_MARK }
