@@ -15,7 +15,7 @@ data class CountAreaSource(val area: FclAreaReference) : FclCountSource
 @Serializable
 data class CountObjectsSource(
   @SerialName("object") val objectKind: FclObjectKind,
-  val areas: List<FclArea>,
+  val areas: List<FclAreaReference>,
   val player: FclReference,
   val filter: FclCondition,
 ) : FclCountSource
