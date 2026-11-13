@@ -10,6 +10,7 @@ kotlin {
   sourceSets {
     commonMain.dependencies {
       implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+      implementation("com.akuleshov7:ktoml-core:0.7.1")
     }
     jvmMain.dependencies {
       implementation("com.github.LucasAlfare:FL-Turns:1.0.0")
