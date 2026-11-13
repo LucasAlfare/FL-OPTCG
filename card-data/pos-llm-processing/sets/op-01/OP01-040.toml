@@ -1,0 +1,78 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-040"
+name = "Kin'emon"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Land of Wano", "The Akazaya Nine"]
+attributes = ["SLASH"]
+cost = 6
+power = 6000
+counter = 0
+
+[source]
+raw_text = '[On Play] If your Leader is [Kouzuki Oden], play up to 1 "The Akazaya Nine" type Character card with a cost of 3 or less from your hand. [DON!! x1] [When Attacking] [Once Per Turn] Set up to 1 of your "The Akazaya Nine" type Character cards with a cost of 3 or less as active. This card has been officially errata\'d.'
+current_text = '[On Play] If your Leader is [Kouzuki Oden], play up to 1 "The Akazaya Nine" type Character card with a cost of 3 or less from your hand. [DON!! x1] [When Attacking] [Once Per Turn] Set up to 1 of your "The Akazaya Nine" type Character cards with a cost of 3 or less as active.'
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = '[On Play] If your Leader is [Kouzuki Oden], play up to 1 "The Akazaya Nine" type Character card with a cost of 3 or less from your hand.'
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "ON_PLAY"
+effect_form = "ONE_SHOT"
+resolution = [{ id = "S1", kind = "IF", condition = { test = "PROPERTY_COMPARE", subject = { kind = "TEXT_DESIGNATED_OBJECT", designation = "your Leader" }, property = "NAME", operator = "EQ", value = { literal = "Kouzuki Oden" } }, steps = [{ id = "S2", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }], filter = { all = [{ test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "The Akazaya Nine" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 3 } }] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "OWNER_PRIVATE_INFORMATION" },
+    { id = "S3", kind = "OPERATION", operation = "PLAY_CARD", selection = "S2", source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }, player = { kind = "PLAYER", role = "YOU" } }] }]
+
+[[abilities]]
+id = "A2"
+source_text = '[DON!! x1] [When Attacking] [Once Per Turn] Set up to 1 of your "The Akazaya Nine" type Character cards with a cost of 3 or less as active.'
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "WHEN_ATTACKING"
+effect_form = "ONE_SHOT"
+usage_limit = { kind = "ONCE_PER_TURN" }
+activation_conditions = { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } }
+resolution = [{ id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], filter = { all = [{ test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "The Akazaya Nine" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 3 } }] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" },
+    { id = "S2", kind = "OPERATION", operation = "SET_ACTIVE", selection = "S1" }]
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "SR"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-040"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-040.jpg"
+rights = "UNVERIFIED"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-040_p1"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-040_p1.jpg"
+rights = "UNVERIFIED"

@@ -1,0 +1,67 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-049"
+name = "Bepo"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Heart Pirates", "Minks"]
+attributes = ["STRIKE"]
+cost = 4
+power = 4000
+counter = 2000
+default_printing_id = "OP01-049"
+
+[source]
+raw_text = "[DON!! x1] [When Attacking] Play up to 1 \"Heart Pirates\" type card other than [Bepo] with a cost of 4 or less from your hand.  This card has been officially errata'd."
+current_text = "[DON!! x1] [When Attacking] Play up to 1 \"Heart Pirates\" type card other than [Bepo] with a cost of 4 or less from your hand."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x1] [When Attacking] Play up to 1 \"Heart Pirates\" type card other than [Bepo] with a cost of 4 or less from your hand."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1"]
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "WHEN_ATTACKING"
+effect_form = "ONE_SHOT"
+
+activation_conditions = { all = [
+  { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } }
+] }
+
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }], filter = { all = [
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "Heart Pirates" } },
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 4 } },
+    { test = "INSTANCE_IDENTITY_COMPARE", subject = { kind = "CANDIDATE" }, relation = "DIFFERENT", other_subject = { kind = "SOURCE" } }
+  ] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "OWNER_PRIVATE_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "PLAY_CARD", subject = "S1", source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }, player = { kind = "PLAYER", role = "YOU" } }
+]
+
+[editorial]
+rarity = "R"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "R"
+art_id = "OP01-049"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-049.jpg"
+rights = "UNVERIFIED"

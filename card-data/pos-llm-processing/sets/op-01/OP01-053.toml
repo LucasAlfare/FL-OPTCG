@@ -1,0 +1,32 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-053"
+name = "Wire"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Kid Pirates"]
+attributes = ["SLASH"]
+cost = 2
+power = 4000
+counter = 1000
+
+[source]
+raw_text = "NULL"
+current_text = ""
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "NON_GAME_TEXT"
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "C"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-053"

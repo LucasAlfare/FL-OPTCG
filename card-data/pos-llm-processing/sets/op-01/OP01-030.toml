@@ -1,0 +1,59 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-030"
+name = "In Two Years!! At the Sabaody Archipelago!!"
+category = "EVENT"
+colors = ["RED"]
+types = ["Straw Hat Crew"]
+cost = 1
+
+[source]
+raw_text = "[Main] Look at 5 cards from the top of your deck; reveal up to 1 \"Straw Hat Crew\" type Character card and add it to your hand. Then, place the rest at the bottom of your deck in any order. [Trigger] Activate this card's [Main] effect.  This card has been officially errata'd."
+current_text = "[Main] Look at 5 cards from the top of your deck; reveal up to 1 \"Straw Hat Crew\" type Character card and add it to your hand. Then, place the rest at the bottom of your deck in any order. [Trigger] Activate this card's [Main] effect."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+rarity = "UC"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-030"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-030.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[Main] Look at 5 cards from the top of your deck; reveal up to 1 \"Straw Hat Crew\" type Character card and add it to your hand. Then, place the rest at the bottom of your deck in any order."
+status = "SUPPORTED"
+event_activation = { window = "MAIN" }
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "EVENT_CARD_RESOLUTION"
+effect_form = "ONE_SHOT"
+resolution = [
+  { id = "S1", kind = "OPERATION", operation = "LOOK", area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, player = { kind = "PLAYER", role = "YOU" }, quantity = { mode = "FIXED", value = { literal = 5 } } },
+  { id = "S2", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }], filter = { all = [ { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "Straw Hat Crew" } } ] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "LOOKED_BY_CHOOSER", information_step = "S1" },
+  { id = "S3", kind = "OPERATION", operation = "REVEAL", selection = "S2" },
+  { id = "S4", kind = "OPERATION", operation = "MOVE_CARD", selection = "S2", source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, destination_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" } },
+  { id = "S5", kind = "THEN", steps = [
+    { id = "S5A", kind = "REMAINDER", look_step = "S1", excluding = ["S2"] },
+    { id = "S5B", kind = "OPERATION", operation = "POSITION_CARD", selection = "S5A", destination_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, position = "BOTTOM", order_chooser = { kind = "PLAYER", role = "YOU" } }
+  ] }
+]
+
+[[abilities]]
+id = "A2"
+source_text = "[Trigger] Activate this card's [Main] effect."
+status = "SUPPORTED"
+keyword_effects = ["TRIGGER"]
+event_activation = { window = "TRIGGER" }

@@ -1,0 +1,61 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-004"
+name = "Usopp"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Straw Hat Crew"]
+attributes = ["RANGED"]
+cost = 2
+power = 3000
+counter = 2000
+
+[source]
+raw_text = "[DON!! x1] [Your Turn] [Once Per Turn] Draw 1 card when your opponent activates an Event."
+current_text = "[DON!! x1] [Your Turn] [Once Per Turn] Draw 1 card when your opponent activates an Event."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "OP01-004-FAQ"
+kind = "FAQ"
+document = "OFFICIAL_OP01_FAQ"
+section = "OP01-004"
+date = "2024-04-05"
+url = "https://en.onepiece-cardgame.com/pdf/qa_op01.pdf?20240405="
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "R"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "R"
+art_id = "OP01-004"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-004.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x1] [Your Turn] [Once Per Turn] Draw 1 card when your opponent activates an Event."
+status = "SUPPORTED"
+source_refs = ["OP01-004-FAQ"]
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "AFTER_EVENT_CARD_RESOLUTION"
+effect_form = "ONE_SHOT"
+usage_limit = { kind = "ONCE_PER_TURN" }
+activation_conditions = { all = [
+  { test = "PLAYER_TURN", value = "YOUR_TURN" },
+  { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } },
+  { test = "EVENT_ACTIVATED_BY", player = { kind = "PLAYER", role = "OPPONENT" } }
+] }
+resolution = [
+  { id = "S1", kind = "OPERATION", operation = "DRAW", player = { kind = "PLAYER", role = "YOU" }, quantity = { mode = "FIXED", value = { literal = 1 } } }
+]

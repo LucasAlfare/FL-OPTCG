@@ -1,0 +1,53 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-028"
+name = "Green Star Rafflesia"
+category = "EVENT"
+colors = ["RED"]
+types = ["Straw Hat Crew"]
+cost = 1
+
+[source]
+raw_text = "[Counter] Give up to 1 of your opponent's Leader or Character cards -2000 power during this turn. [Trigger] Activate this card's [Counter] effect.  This card has been officially errata'd."
+current_text = "[Counter] Give up to 1 of your opponent's Leader or Character cards -2000 power during this turn. [Trigger] Activate this card's [Counter] effect."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+rarity = "C"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-028"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-028.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[Counter] Give up to 1 of your opponent's Leader or Character cards -2000 power during this turn."
+status = "SUPPORTED"
+event_activation = { window = "COUNTER" }
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "EVENT_CARD_RESOLUTION"
+effect_form = "ONE_SHOT"
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "OPPONENT" }, name = "LEADER_AREA" }, { kind = "AREA", player = { kind = "PLAYER", role = "OPPONENT" }, name = "CHARACTER_AREA" }], quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "MODIFY_POWER", selection = "S1", operator = "SUBTRACT", value = { literal = 2000 }, duration = { kind = "THIS_TURN" } }
+]
+
+[[abilities]]
+id = "A2"
+source_text = "[Trigger] Activate this card's [Counter] effect."
+status = "SUPPORTED"
+keyword_effects = ["TRIGGER"]
+event_activation = { window = "TRIGGER" }

@@ -1,0 +1,63 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-039"
+name = "Killer"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Kid Pirates", "Supernovas"]
+attributes = ["SLASH"]
+cost = 2
+power = 2000
+counter = 1000
+
+[source]
+raw_text = '[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.) [DON!! x1] [On Block] If you have 3 or more Characters, draw 1 card.'
+current_text = '[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.) [DON!! x1] [On Block] If you have 3 or more Characters, draw 1 card.'
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = '[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)'
+status = "SUPPORTED"
+keyword_effects = ["BLOCKER"]
+
+[[abilities]]
+id = "A2"
+source_text = '[DON!! x1] [On Block] If you have 3 or more Characters, draw 1 card.'
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "ON_BLOCK"
+effect_form = "ONE_SHOT"
+activation_conditions = { all = [{ test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } }, { test = "OBJECT_COUNT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], player = { kind = "PLAYER", role = "YOU" }, operator = "GTE", value = { literal = 3 }, filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } } }] }
+resolution = [
+ { id = "S1", kind = "OPERATION", operation = "DRAW", player = { kind = "PLAYER", role = "YOU" }, quantity = { mode = "FIXED", value = { literal = 1 } } }
+]
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "UC"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-039"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-039.jpg"
+rights = "UNVERIFIED"

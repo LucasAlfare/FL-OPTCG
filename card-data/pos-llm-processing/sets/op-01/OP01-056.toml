@@ -1,0 +1,51 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-056"
+name = "Demon Face"
+category = "EVENT"
+colors = ["GREEN"]
+types = ["Hawkins Pirates", "Supernovas"]
+cost = 6
+
+[source]
+raw_text = "[Main] K.O. up to 2 of your opponent's rested Characters with a cost of 5 or less.  This card has been officially errata'd."
+current_text = "[Main] K.O. up to 2 of your opponent's rested Characters with a cost of 5 or less."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = "[Main] K.O. up to 2 of your opponent's rested Characters with a cost of 5 or less."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1"]
+event_activation = { window = "MAIN" }
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "EVENT_CARD_RESOLUTION"
+effect_form = "ONE_SHOT"
+
+resolution = [{ id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "OPPONENT" }, name = "CHARACTER_AREA" }], filter = { all = [{ test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "STATE", operator = "EQ", value = { literal = "RESTED" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 5 } }] }, quantity = { mode = "UP_TO", maximum = { literal = 2 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" }, { id = "S2", kind = "OPERATION", operation = "KO_CHARACTER", selection = "S1" }]
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "UC"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-056"

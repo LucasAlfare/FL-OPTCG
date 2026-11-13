@@ -1,0 +1,50 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-023"
+name = "Marco"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Former Whitebeard Pirates"]
+attributes = ["SPECIAL"]
+cost = 3
+power = 5000
+counter = 1000
+
+[source]
+raw_text = "NULL"
+current_text = "[Your Turn] If your Leader is [Edward.Newgate], this Character gains +2000 power."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+notes = "raw_text was NULL; current_text established from the official card text."
+
+[editorial]
+rarity = "C"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-023"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-023.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[Your Turn] If your Leader is [Edward.Newgate], this Character gains +2000 power."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "PERMANENT"
+valid_when = { all = [ { test = "PLAYER_TURN", value = "YOUR_TURN" }, { test = "PROPERTY_COMPARE", subject = { kind = "TEXT_DESIGNATED_OBJECT", designation = "your Leader" }, property = "NAME", operator = "EQ", value = { literal = "Edward.Newgate" } } ] }
+
+[abilities.effects.continuous]
+kind = "MODIFY_POWER"
+subject = { kind = "SOURCE" }
+operator = "ADD"
+value = { literal = 2000 }

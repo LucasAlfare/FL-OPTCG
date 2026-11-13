@@ -1,0 +1,52 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-005"
+name = "Uta"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Film"]
+attributes = ["SPECIAL"]
+cost = 4
+power = 4000
+counter = 0
+
+[source]
+raw_text = "[On Play] Add up to 1 red Character card other than [Uta] with a cost of 3 or less from your trash to your hand.  This card has been officially errata'd."
+current_text = "[On Play] Add up to 1 red Character card other than [Uta] with a cost of 3 or less from your trash to your hand."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "R"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "R"
+art_id = "OP01-005"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-005.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[On Play] Add up to 1 red Character card other than [Uta] with a cost of 3 or less from your trash to your hand."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "ON_PLAY"
+effect_form = "ONE_SHOT"
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "TRASH" }], filter = { all = [
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } },
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COLOR", operator = "EQ", value = { literal = "RED" } },
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 3 } },
+    { not = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "NAME", operator = "EQ", value = { literal = "Uta" } } }
+  ] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "RETURN_CARD", selection = "S1", destination_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" } }
+]

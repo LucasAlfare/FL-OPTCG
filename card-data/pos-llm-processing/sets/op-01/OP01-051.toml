@@ -1,0 +1,105 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-051"
+name = "Eustass\"Captain\"Kid"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Kid Pirates", "Supernovas"]
+attributes = ["SPECIAL"]
+cost = 8
+power = 8000
+counter = 0
+
+[source]
+raw_text = "[DON!! x1] [Opponent's Turn] If this Character is rested, your opponent cannot attack any card other than the Character [Eustass\"Captain\"Kid]. [Activate:Main] [Once Per Turn] You may rest this Character: Play up to 1 Character card with a cost of 3 or less from your hand.  This card has been officially errata'd."
+current_text = "[DON!! x1] [Opponent's Turn] If this Character is rested, your opponent cannot attack any card other than the Character [Eustass\"Captain\"Kid]. [Activate:Main] [Once Per Turn] You may rest this Character: Play up to 1 Character card with a cost of 3 or less from your hand."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[[source.references]]
+id = "ERRATA-20230217"
+kind = "ERRATA"
+document = "OFFICIAL_CARD_ERRATA"
+date = "2023-02-17"
+url = "https://en.onepiece-cardgame.com/rules/errata_card/"
+
+[[source.references]]
+id = "OP01-051-FAQ"
+kind = "FAQ"
+document = "OFFICIAL_OP01_FAQ"
+section = "OP01-051"
+date = "2024-04-05"
+url = "https://en.onepiece-cardgame.com/pdf/qa_op01.pdf?20240405="
+
+[[source.references]]
+id = "OP11-010-FAQ"
+kind = "FAQ"
+document = "OFFICIAL_OP11_FAQ"
+section = "OP11-010"
+date = "2025-05-23"
+url = "https://en.onepiece-cardgame.com/pdf/qa_op11.pdf?20250523="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x1] [Opponent's Turn] If this Character is rested, your opponent cannot attack any card other than the Character [Eustass\"Captain\"Kid]."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1", "ERRATA-20230217", "OP01-051-FAQ", "OP11-010-FAQ"]
+
+[[abilities.effects]]
+id = "E1"
+category = "PERMANENT"
+valid_when = { all = [
+  { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } },
+  { test = "PLAYER_TURN", value = "OPPONENT_TURN" },
+  { test = "PROPERTY_COMPARE", subject = { kind = "SOURCE" }, property = "STATE", operator = "EQ", value = { literal = "RESTED" } }
+] }
+
+[abilities.effects.continuous]
+kind = "RESTRICT_ATTACK_TARGETS"
+subject = { kind = "SOURCE" }
+attacking_player = { kind = "PLAYER", role = "OPPONENT" }
+allowed_targets = { object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "NAME", operator = "EQ", value = { literal = "Eustass\"Captain\"Kid" } } }
+
+[[abilities]]
+id = "A2"
+source_text = "[Activate:Main] [Once Per Turn] You may rest this Character: Play up to 1 Character card with a cost of 3 or less from your hand."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1", "ERRATA-20230217"]
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "MAIN_PHASE"
+usage_limit = { kind = "ONCE_PER_TURN" }
+effect_form = "ONE_SHOT"
+
+activation_costs = [{ kind = "REST_CARD", payer = { kind = "PLAYER", role = "YOU" }, subject = { kind = "SOURCE" }, optional = true }]
+
+resolution = [{ id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }], filter = { all = [{ test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 3 } }] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "OWNER_PRIVATE_INFORMATION" }, { id = "S2", kind = "OPERATION", operation = "PLAY_CARD", selection = "S1", source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }, player = { kind = "PLAYER", role = "YOU" } }]
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "SR"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-051"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-051_p1"

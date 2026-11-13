@@ -1,0 +1,86 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-047"
+name = "Trafalgar Law"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Heart Pirates", "Supernovas"]
+attributes = ["SLASH"]
+cost = 5
+power = 6000
+counter = 0
+default_printing_id = "OP01-047"
+
+[source]
+raw_text = "[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.) [On Play] You may return 1 Character to your hand: Play up to 1 Character card with a cost of 3 or less from your hand.  This card has been officially errata'd."
+current_text = "[Blocker] [On Play] You may return 1 Character to your hand: Play up to 1 Character card with a cost of 3 or less from your hand."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[[source.references]]
+id = "ERRATA-OP01-047"
+kind = "ERRATA"
+document = "OFFICIAL_CARD_ERRATA"
+date = "2023-02-17"
+url = "https://en.onepiece-cardgame.com/rules/errata_card/"
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = "[Blocker]"
+status = "SUPPORTED"
+keyword_effects = ["BLOCKER"]
+
+[[abilities]]
+id = "A2"
+source_text = "[On Play] You may return 1 Character to your hand: Play up to 1 Character card with a cost of 3 or less from your hand."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1", "ERRATA-OP01-047"]
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "ON_PLAY"
+effect_form = "ONE_SHOT"
+
+activation_costs = [
+  { kind = "RETURN_CHARACTER_TO_OWNER_HAND", payer = { kind = "PLAYER", role = "YOU" }, selection = { object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, quantity = { mode = "FIXED", value = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" }, optional = true }
+]
+
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }], filter = { all = [
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } },
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 3 } }
+  ] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "OWNER_PRIVATE_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "PLAY_CARD", subject = "S1", source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" }, player = { kind = "PLAYER", role = "YOU" } }
+]
+
+[editorial]
+rarity = "SR"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-047"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-047.jpg"
+rights = "UNVERIFIED"
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-047_p1"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-047_p1.jpg"
+rights = "UNVERIFIED"

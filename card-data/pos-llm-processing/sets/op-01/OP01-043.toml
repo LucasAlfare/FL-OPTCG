@@ -1,0 +1,35 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-043"
+name = "Shinobu"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Land of Wano"]
+attributes = ["SPECIAL"]
+cost = 3
+power = 5000
+counter = 1000
+default_printing_id = "OP01-043"
+
+[source]
+raw_text = "NULL"
+current_text = ""
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "NON_GAME_TEXT"
+
+[editorial]
+rarity = "C"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-043"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-043.jpg"
+rights = "UNVERIFIED"

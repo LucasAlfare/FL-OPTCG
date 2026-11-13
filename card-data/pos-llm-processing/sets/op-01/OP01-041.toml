@@ -1,0 +1,72 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-041"
+name = "Kouzuki Momonosuke"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Land of Wano", "Kouzuki Clan"]
+attributes = ["SLASH"]
+cost = 1
+power = 0
+counter = 1000
+default_printing_id = "OP01-041"
+
+[source]
+raw_text = "[Activate:Main] (1) (You may rest the specified number of DON!! cards in your cost area) You may rest this Character: Look at 5 cards from the top of your deck; reveal up to 1 \"Land of Wano\" type card and add it to your hand. Then, place the rest at the bottom of your deck in any order.  This card has been officially errata'd."
+current_text = "[Activate:Main] (1) You may rest this Character: Look at 5 cards from the top of your deck; reveal up to 1 \"Land of Wano\" type card and add it to your hand. Then, place the rest at the bottom of your deck in any order."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = "[Activate:Main] (1) You may rest this Character: Look at 5 cards from the top of your deck; reveal up to 1 \"Land of Wano\" type card and add it to your hand. Then, place the rest at the bottom of your deck in any order."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1"]
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "MAIN_PHASE"
+effect_form = "ONE_SHOT"
+
+activation_costs = [
+  { kind = "REST_DON", payer = { kind = "PLAYER", role = "YOU" }, selection = { object = "DON", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "COST_AREA" }], filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "STATE", operator = "EQ", value = { literal = "ACTIVE" } }, quantity = { mode = "FIXED", value = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" } },
+  { kind = "REST_CARD", payer = { kind = "PLAYER", role = "YOU" }, subject = { kind = "SOURCE" }, optional = true }
+]
+
+resolution = [
+  { id = "S1", kind = "OPERATION", operation = "LOOK", area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, player = { kind = "PLAYER", role = "YOU" }, quantity = { mode = "FIXED", value = { literal = 5 } } },
+  { id = "S2", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }], filter = { all = [
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } },
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "Land of Wano" } }
+  ] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "LOOKED_BY_CHOOSER", information_step = "S1" },
+  { id = "S3", kind = "THEN", steps = [
+    { id = "S3A", kind = "OPERATION", operation = "MOVE_CARD", selection = "S2", source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, destination_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "HAND" } },
+    { id = "S3B", kind = "REMAINDER", look_step = "S1", excluding = ["S2"] },
+    { id = "S3C", kind = "OPERATION", operation = "POSITION_CARD", selection = "S3B", destination_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, position = "BOTTOM", order_chooser = { kind = "PLAYER", role = "YOU" } }
+  ] }
+]
+
+[editorial]
+rarity = "R"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "R"
+art_id = "OP01-041"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-041.jpg"
+rights = "UNVERIFIED"

@@ -1,0 +1,69 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-024"
+name = "Monkey.D.Luffy"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Straw Hat Crew", "Supernovas"]
+attributes = ["STRIKE"]
+cost = 2
+power = 3000
+counter = 1000
+
+[source]
+raw_text = "[DON!! x2] This Character cannot be K.O.'d in battle by \"Strike\" attribute Characters. [Activate:Main] [Once Per Turn] Give this Character up to 2 rested DON!! cards."
+current_text = "[DON!! x2] This Character cannot be K.O.'d in battle by \"Strike\" attribute Characters. [Activate:Main] [Once Per Turn] Give this Character up to 2 rested DON!! cards."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+rarity = "SR"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-024"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-024.jpg"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "SR"
+art_id = "OP01-024_p1"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-024_p1.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x2] This Character cannot be K.O.'d in battle by \"Strike\" attribute Characters."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "PERMANENT"
+valid_when = { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 2 } }
+
+[abilities.effects.continuous]
+kind = "PREVENT_BATTLE_KO"
+subject = { kind = "SOURCE" }
+attacker_condition = { all = [ { test = "PROPERTY_COMPARE", subject = { kind = "ATTACKER" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "ATTACKER" }, property = "ATTRIBUTE", operator = "EQ", value = { literal = "STRIKE" } } ] }
+
+[[abilities]]
+id = "A2"
+source_text = "[Activate:Main] [Once Per Turn] Give this Character up to 2 rested DON!! cards."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "MAIN_PHASE"
+effect_form = "ONE_SHOT"
+usage_limit = { kind = "ONCE_PER_TURN" }
+resolution = [
+  { id = "S1", kind = "OPERATION", operation = "GIVE_DON", subject = { kind = "SOURCE" }, quantity = { mode = "UP_TO", maximum = { literal = 2 } }, source_state = "RESTED" }
+]

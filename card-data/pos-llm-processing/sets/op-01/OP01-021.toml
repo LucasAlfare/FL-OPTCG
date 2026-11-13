@@ -1,0 +1,48 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-021"
+name = "Franky"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Straw Hat Crew"]
+attributes = ["RANGED"]
+cost = 3
+power = 4000
+counter = 0
+
+[source]
+raw_text = "[DON!! x1] This Character can also attack your opponent's active Characters."
+current_text = "[DON!! x1] This Character can also attack your opponent's active Characters."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+rarity = "UC"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-021"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-021.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x1] This Character can also attack your opponent's active Characters."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "PERMANENT"
+valid_when = { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } }
+
+[abilities.effects.continuous]
+kind = "GRANT_ATTACK_TARGET_PERMISSION"
+subject = { kind = "SOURCE" }
+target_scope = { object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "OPPONENT" }, name = "CHARACTER_AREA" }], states = ["ACTIVE"] }

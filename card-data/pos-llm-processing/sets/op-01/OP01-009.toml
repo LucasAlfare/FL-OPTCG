@@ -1,0 +1,47 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-009"
+name = "Carrot"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Minks"]
+attributes = ["STRIKE"]
+cost = 2
+power = 3000
+counter = 1000
+
+[source]
+raw_text = "[Trigger] Play this card."
+current_text = "[Trigger] Play this card."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "C"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-009"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-009.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[Trigger] Play this card."
+status = "SUPPORTED"
+keyword_effects = ["TRIGGER"]
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "TRIGGER"
+effect_form = "ONE_SHOT"
+resolution = [
+  { id = "S1", kind = "OPERATION", operation = "PLAY_CARD", subject = { kind = "SOURCE" }, source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "LIFE_AREA" }, player = { kind = "PLAYER", role = "YOU" } }
+]

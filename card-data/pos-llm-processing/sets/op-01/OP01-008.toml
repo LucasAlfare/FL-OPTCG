@@ -1,0 +1,63 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-008"
+name = "Cavendish"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Beautiful Pirates", "Supernovas"]
+attributes = ["SLASH"]
+cost = 4
+power = 5000
+counter = 0
+default_printing_id = "OP01-008"
+
+[[card.printing_overrides]]
+printing_id = "OP01-008_p1"
+types = ["Beautiful Pirates", "Straw Hat Crew", "Supernovas"]
+
+[source]
+raw_text = "[On Play] You may add 1 card from your Life area to your hand: This Character gains [Rush] during this turn. (This card can attack on the turn in which it is played.)"
+current_text = "[On Play] You may add 1 card from your Life area to your hand: This Character gains [Rush] during this turn. (This card can attack on the turn in which it is played.)"
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "C"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-008_p1"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-008_p1.jpg"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "C"
+art_id = "OP01-008"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-008.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[On Play] You may add 1 card from your Life area to your hand: This Character gains [Rush] during this turn. (This card can attack on the turn in which it is played.)"
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "ON_PLAY"
+effect_form = "CONTINUOUS"
+activation_costs = [
+  { kind = "ADD_LIFE_TO_HAND", payer = { kind = "PLAYER", role = "YOU" }, quantity = { mode = "FIXED", value = { literal = 1 } }, optional = true }
+]
+
+[abilities.effects.continuous]
+kind = "GRANT_KEYWORD_EFFECT"
+subject = { kind = "SOURCE" }
+keyword_effect = "RUSH"
+duration = { kind = "THIS_TURN" }

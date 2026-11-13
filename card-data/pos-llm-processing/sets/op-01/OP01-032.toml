@@ -1,0 +1,53 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-032"
+name = "Ashura Doji"
+category = "CHARACTER"
+colors = ["GREEN"]
+types = ["Land of Wano", "The Akazaya Nine"]
+attributes = ["SLASH"]
+cost = 3
+power = 4000
+counter = 1000
+
+[source]
+raw_text = '[DON!! x1] If your opponent has 2 or more rested Characters, this Character gains +2000 power.'
+current_text = '[DON!! x1] If your opponent has 2 or more rested Characters, this Character gains +2000 power.'
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = '[DON!! x1] If your opponent has 2 or more rested Characters, this Character gains +2000 power.'
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "PERMANENT"
+valid_when = { all = [{ test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } }, { test = "OBJECT_COUNT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "OPPONENT" }, name = "CHARACTER_AREA" }], player = { kind = "PLAYER", role = "OPPONENT" }, operator = "GTE", value = { literal = 2 }, filter = { all = [{ test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "STATE", operator = "EQ", value = { literal = "RESTED" } }] } }] }
+continuous = { kind = "MODIFY_POWER", subject = { kind = "SOURCE" }, operator = "ADD", value = { literal = 2000 } }
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "UC"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-032"
+thumbnail_role = "FINAL"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-032.jpg"
+rights = "UNVERIFIED"

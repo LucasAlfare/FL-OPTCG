@@ -1,0 +1,64 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-003"
+name = "Monkey.D.Luffy"
+category = "LEADER"
+colors = ["GREEN", "RED"]
+types = ["Straw Hat Crew", "Supernovas"]
+attributes = ["STRIKE"]
+power = 5000
+life = 4
+
+[source]
+raw_text = "[Activate:Main] [Once Per Turn] (4) (You may rest the specified number of DON!! cards in your cost area): Set up to 1 of your \"Supernova\" or \"Straw Hat Crew\" type Character cards with a cost of 5 or less as active. It gains +1000 power during this turn.  This card has been officially errata'd."
+current_text = "[Activate:Main] [Once Per Turn] (4) (You may rest the specified number of DON!! cards in your cost area): Set up to 1 of your \"Supernovas\" or \"Straw Hat Crew\" type Character cards with a cost of 5 or less as active. It gains +1000 power during this turn."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "L"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "L"
+art_id = "OP01-003"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-003.jpg"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "L"
+art_id = "OP01-003_p1"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-003_p1.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[Activate:Main] [Once Per Turn] (4) (You may rest the specified number of DON!! cards in your cost area): Set up to 1 of your \"Supernovas\" or \"Straw Hat Crew\" type Character cards with a cost of 5 or less as active. It gains +1000 power during this turn."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "MAIN_PHASE"
+effect_form = "ONE_SHOT"
+usage_limit = { kind = "ONCE_PER_TURN" }
+activation_costs = [
+  { kind = "REST_DON", payer = { kind = "PLAYER", role = "YOU" }, selection = { object = "DON", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "COST_AREA" }], filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "STATE", operator = "EQ", value = { literal = "ACTIVE" } }, quantity = { mode = "FIXED", value = { literal = 4 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" } }
+]
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], filter = { all = [
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } },
+    { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "COST", operator = "LTE", value = { literal = 5 } },
+    { any = [
+      { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "Supernovas" } },
+      { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "TYPE", operator = "EQ", value = { literal = "Straw Hat Crew" } }
+    ] }
+  ] }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "SET_ACTIVE", selection = "S1" },
+  { id = "S3", kind = "OPERATION", operation = "MODIFY_POWER", selection = "S1", operator = "ADD", value = { literal = 1000 }, duration = { kind = "THIS_TURN" } }
+]

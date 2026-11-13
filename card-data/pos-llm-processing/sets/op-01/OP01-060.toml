@@ -1,0 +1,61 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-060"
+name = "Donquixote Doflamingo"
+category = "LEADER"
+colors = ["BLUE"]
+types = ["Donquixote Pirates", "The Seven Warlords of the Sea"]
+attributes = ["SPECIAL"]
+power = 5000
+life = 5
+
+[source]
+raw_text = "[DON!! x2] [When Attacking] (1) (You may rest the specified number of DON!! cards in your cost area.): Reveal 1 card from the top of your deck. If that card is a \"The Seven Warlords of the Sea\" type Character card with a cost of 4 or less, you may play that card rested."
+current_text = "[DON!! x2] [When Attacking] (1): Reveal 1 card from the top of your deck. If that card is a \"The Seven Warlords of the Sea\" type Character card with a cost of 4 or less, you may play that card rested."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[[source.references]]
+id = "CR-1.2.1"
+kind = "CR"
+document = "ONE_PIECE_CARD_GAME_COMPREHENSIVE_RULES"
+version = "1.2.1"
+url = "https://en.onepiece-cardgame.com/pdf/rule_comprehensive.pdf?20260828="
+
+[translation]
+status = "SUPPORTED"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x2] [When Attacking] (1): Reveal 1 card from the top of your deck. If that card is a \"The Seven Warlords of the Sea\" type Character card with a cost of 4 or less, you may play that card rested."
+status = "SUPPORTED"
+source_refs = ["CR-1.2.1"]
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "WHEN_ATTACKING"
+effect_form = "ONE_SHOT"
+
+activation_conditions = { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 2 } }
+
+activation_costs = [{ kind = "REST_DON", payer = { kind = "PLAYER", role = "YOU" }, selection = { object = "DON", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "COST_AREA" }], filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "STATE", operator = "EQ", value = { literal = "ACTIVE" } }, quantity = { mode = "FIXED", value = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" }, optional = true }]
+
+resolution = [{ id = "S1", kind = "OPERATION", operation = "REVEAL", subject = { kind = "TOP_CARD", player = { kind = "PLAYER", role = "YOU" }, area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" } } }, { id = "S2", kind = "IF", condition = { all = [{ test = "PROPERTY_COMPARE", subject = { kind = "TOP_CARD", player = { kind = "PLAYER", role = "YOU" }, area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" } }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, { test = "PROPERTY_COMPARE", subject = { kind = "TOP_CARD", player = { kind = "PLAYER", role = "YOU" }, area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" } }, property = "TYPE", operator = "EQ", value = { literal = "The Seven Warlords of the Sea" } }, { test = "PROPERTY_COMPARE", subject = { kind = "TOP_CARD", player = { kind = "PLAYER", role = "YOU" }, area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" } }, property = "COST", operator = "LTE", value = { literal = 4 } }] }, steps = [{ id = "S2A", kind = "OPTIONAL", chooser = { kind = "PLAYER", role = "YOU" }, steps = [{ id = "S2A1", kind = "OPERATION", operation = "PLAY_CARD", subject = { kind = "TOP_CARD", player = { kind = "PLAYER", role = "YOU" }, area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" } }, source_area = { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "DECK" }, player = { kind = "PLAYER", role = "YOU" }, state = "RESTED" }] }] }]
+
+[editorial]
+set_id = "OP-01"
+set_name = "Romance Dawn"
+rarity = "L"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "L"
+art_id = "OP01-060"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "L"
+art_id = "OP01-060_p1"

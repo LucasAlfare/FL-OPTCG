@@ -1,0 +1,51 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-029"
+name = "Radical Beam!!"
+category = "EVENT"
+colors = ["RED"]
+types = ["Straw Hat Crew"]
+cost = 1
+
+[source]
+raw_text = "[Counter] Up to 1 of your Leader or Character cards gains +2000 power during this battle. Then, if you have 2 or less Life cards, that card gains an additional +2000 power.  This card has been officially errata'd."
+current_text = "[Counter] Up to 1 of your Leader or Character cards gains +2000 power during this battle. Then, if you have 2 or less Life cards, that card gains an additional +2000 power."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+rarity = "UC"
+set_id = "OP-01"
+set_name = "Romance Dawn"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-029"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-029.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[Counter] Up to 1 of your Leader or Character cards gains +2000 power during this battle. Then, if you have 2 or less Life cards, that card gains an additional +2000 power."
+status = "SUPPORTED"
+event_activation = { window = "COUNTER" }
+
+[[abilities.effects]]
+id = "E1"
+category = "ACTIVATE"
+activation_window = "EVENT_CARD_RESOLUTION"
+effect_form = "ONE_SHOT"
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "LEADER_AREA" }, { kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "MODIFY_POWER", selection = "S1", operator = "ADD", value = { literal = 2000 }, duration = { kind = "THIS_BATTLE" } },
+  { id = "S3", kind = "THEN", steps = [
+    { id = "S3A", kind = "IF", condition = { test = "AREA_COUNT", area = "LIFE_AREA", player = { kind = "PLAYER", role = "YOU" }, operator = "LTE", value = { literal = 2 } }, steps = [
+      { id = "S3A1", kind = "OPERATION", operation = "MODIFY_POWER", selection = "S1", operator = "ADD", value = { literal = 2000 }, duration = { kind = "THIS_BATTLE" } }
+    ] }
+  ] }
+]

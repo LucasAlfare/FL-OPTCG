@@ -1,0 +1,56 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-001"
+name = "Roronoa Zoro"
+category = "LEADER"
+colors = ["RED"]
+types = ["Straw Hat Crew", "Supernovas"]
+attributes = ["SLASH"]
+power = 5000
+life = 5
+
+[source]
+raw_text = "[DON!! x1] [Your Turn] All of your Characters gain +1000 power."
+current_text = "[DON!! x1] [Your Turn] All of your Characters gain +1000 power."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "L"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "L"
+art_id = "OP01-001"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-001.jpg"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "L"
+art_id = "OP01-001_p1"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-001_p1.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[DON!! x1] [Your Turn] All of your Characters gain +1000 power."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "PERMANENT"
+valid_when = { all = [
+  { test = "DON_GIVEN_TO_SOURCE", operator = "GTE", value = { literal = 1 } },
+  { test = "PLAYER_TURN", value = "YOUR_TURN" }
+] }
+
+[abilities.effects.continuous]
+kind = "MODIFY_POWER"
+scope = { object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "YOU" }, name = "CHARACTER_AREA" }], player = { kind = "PLAYER", role = "YOU" } }
+operator = "ADD"
+value = { literal = 1000 }

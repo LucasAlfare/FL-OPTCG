@@ -1,0 +1,47 @@
+format = "FL_CARD_LANGUAGE"
+language_version = "1.10.0"
+
+[card]
+number = "OP01-006"
+name = "Otama"
+category = "CHARACTER"
+colors = ["RED"]
+types = ["Land of Wano"]
+attributes = ["SPECIAL"]
+cost = 1
+power = 0
+counter = 2000
+
+[source]
+raw_text = "[On Play] Give up to 1 of your opponent's Characters -2000 power during this turn.  This card has been officially errata'd."
+current_text = "[On Play] Give up to 1 of your opponent's Characters -2000 power during this turn."
+language = "en"
+region = "EN_NA_EU_OC_LATAM_ME"
+
+[translation]
+status = "SUPPORTED"
+
+[editorial]
+set_id = "OP-01"
+rarity = "UC"
+
+[[editorial.printings]]
+set_id = "OP-01"
+rarity = "UC"
+art_id = "OP01-006"
+thumbnail_url = "https://optcgapi.com/media/static/Card_Images/OP01-006.jpg"
+
+[[abilities]]
+id = "A1"
+source_text = "[On Play] Give up to 1 of your opponent's Characters -2000 power during this turn."
+status = "SUPPORTED"
+
+[[abilities.effects]]
+id = "E1"
+category = "AUTO"
+timing = "ON_PLAY"
+effect_form = "ONE_SHOT"
+resolution = [
+  { id = "S1", kind = "SELECT", object = "CARD", areas = [{ kind = "AREA", player = { kind = "PLAYER", role = "OPPONENT" }, name = "CHARACTER_AREA" }], filter = { test = "PROPERTY_COMPARE", subject = { kind = "CANDIDATE" }, property = "CATEGORY", operator = "EQ", value = { literal = "CHARACTER" } }, quantity = { mode = "UP_TO", maximum = { literal = 1 } }, chooser = { kind = "PLAYER", role = "YOU" }, information = "PUBLIC_INFORMATION" },
+  { id = "S2", kind = "OPERATION", operation = "MODIFY_POWER", selection = "S1", operator = "SUBTRACT", value = { literal = 2000 }, duration = { kind = "THIS_TURN" } }
+]
