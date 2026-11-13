@@ -1,0 +1,140 @@
+package com.lucasalfare.opcg.fcl.model
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+enum class FclCardCategory { LEADER, CHARACTER, EVENT, STAGE, DON }
+
+@Serializable
+enum class FclTranslationStatus { SUPPORTED, BLOCKED_NORMATIVE, BLOCKED_CAPABILITY, INVALID_SOURCE, NON_GAME_TEXT }
+
+@Serializable
+enum class FclBlockerCode { BLOCKED_NORMATIVE, BLOCKED_CAPABILITY, INVALID_SOURCE }
+
+@Serializable
+enum class FclBlockerScope { CARD, ABILITY, EFFECT }
+
+@Serializable
+enum class FclSourceKind { CR, FAQ, ERRATA, OFFICIAL_CARD_TEXT }
+
+@Serializable
+enum class FclKeywordEffect { RUSH, DOUBLE_ATTACK, BANISH, BLOCKER, TRIGGER, RUSH_CHARACTER, UNBLOCKABLE }
+
+@Serializable
+enum class FclEventActivationWindow { MAIN, COUNTER, TRIGGER }
+
+@Serializable
+enum class FclActivationWindow { MAIN_PHASE, EVENT_CARD_RESOLUTION }
+
+@Serializable
+enum class FclThumbnailRole { SAMPLE, CUSTOM, FINAL }
+
+@Serializable
+enum class FclEffectForm { ONE_SHOT, CONTINUOUS }
+
+@Serializable
+enum class FclAutoTiming {
+  ON_PLAY, ON_KO, WHEN_ATTACKING, ON_OPPONENT_ATTACK, ON_BLOCK, TRIGGER, START_OF_GAME, START_OF_TURN, START_OF_MAIN_PHASE, END_OF_YOUR_TURN, END_OF_OPPONENT_TURN, AFTER_EVENT_CARD_RESOLUTION, ON_OPPONENT_CHARACTER_KO,
+}
+
+@Serializable
+enum class FclUsageLimitKind { ONCE_PER_TURN }
+
+@Serializable
+enum class FclOperation {
+  DRAW, TRASH_HAND, TRASH_DECK, KO_CHARACTER, MOVE_CARD, REST, SET_ACTIVE, GIVE_DON, ADD_DON, DON_MINUS, PLAY_CARD, REVEAL, LOOK, SHUFFLE_DECK, MODIFY_POWER, SET_BASE_POWER, MODIFY_COST, SET_BASE_COST, MODIFY_CHARACTERISTIC, GRANT_KEYWORD_EFFECT, DEAL_LEADER_DAMAGE, MOVE_LIFE_CARD, POSITION_CARD, RETURN_CARD, END_GAME, PREVENT_ATTACK,
+}
+
+@Serializable
+enum class FclContinuousKind {
+  MODIFY_POWER, MODIFY_COST, SET_BASE_POWER, SET_BASE_COST, MODIFY_CHARACTERISTIC, GRANT_KEYWORD_EFFECT, REMOVE_KEYWORD_EFFECT, GRANT_ATTACK_TARGET_PERMISSION, RESTRICT_ATTACK_TARGETS, PREVENT_ATTACK, PREVENT_BATTLE_KO, RESTRICT_KEYWORD_EFFECT_ACTIVATION,
+}
+
+@Serializable
+enum class FclCharacteristicProperty { NAME, TYPE, ATTRIBUTE }
+
+@Serializable
+enum class FclComparableProperty {
+  CATEGORY, NAME, COLOR, TYPE, ATTRIBUTE, POWER, BASE_POWER, COST, BASE_COST, LEADER_LIFE, COUNTER, STATE, AREA, PLAYER_CONTEXT, OWNER, CONTROLLER, KEYWORD_EFFECT, KEYWORD, DON_GIVEN_TO_CARD,
+}
+
+@Serializable
+enum class FclArithmeticOperator { ADD, SUBTRACT }
+
+@Serializable
+enum class FclCharacteristicOperator { SET, ADD, REMOVE }
+
+@Serializable
+enum class FclComparisonOperator { EQ, GT, GTE, LT, LTE, INCLUSIVE_RANGE }
+
+@Serializable
+enum class FclTest {
+  PROPERTY_COMPARE, PLAYER_TURN, DON_GIVEN_TO_SOURCE, DON_IN_FIELD, AREA_COUNT, OBJECT_COUNT, SUM_COST, EVENT_ACTIVATED_BY, COLOR_SET_COMPARE, INSTANCE_IDENTITY_COMPARE,
+}
+
+@Serializable
+enum class FclColorSetRelation { DISJOINT, OVERLAPS, EQUAL }
+
+@Serializable
+enum class FclInstanceRelation { SAME, DIFFERENT }
+
+@Serializable
+enum class FclPlayerTurn { YOUR_TURN, OPPONENT_TURN }
+
+@Serializable
+enum class FclPlayerRole {
+  YOU, OPPONENT, TURN_PLAYER, NON_TURN_PLAYER, CONTEXT_PLAYER, OWNER, CONTROLLER, ACTIVATOR, CHOOSER, EXECUTOR, AFFECTED,
+}
+
+@Serializable
+enum class FclArea {
+  DECK, DON_DECK, HAND, TRASH, LEADER_AREA, CHARACTER_AREA, STAGE_AREA, COST_AREA, LIFE_AREA,
+}
+
+@Serializable
+enum class FclPosition { TOP, BOTTOM, NORMAL }
+
+@Serializable
+enum class FclDonScope { FIELD, COST_AREA, DON_DECK }
+
+@Serializable
+enum class FclObjectKind { CARD, DON }
+
+@Serializable
+enum class FclQuantityMode { FIXED, UP_TO, DYNAMIC, ALL }
+
+@Serializable
+enum class FclInformation {
+  PUBLIC_INFORMATION, OWNER_PRIVATE_INFORMATION, LOOKED_BY_CHOOSER, REVEALED_TO_CHOOSER, FACE_DOWN_UNVERIFIABLE,
+}
+
+@Serializable
+enum class FclOutcome { WIN, LOSE }
+
+@Serializable
+enum class FclPaymentKind {
+  REST_DON, DON_MINUS, REST_CARD, TRASH_HAND_CARD, RETURN_CHARACTER_TO_OWNER_HAND, ADD_LIFE_TO_HAND, PLACE_HAND_CARD_BOTTOM_DECK,
+}
+
+@Serializable
+enum class FclDurationKind {
+  THIS_TURN, UNTIL_END_OF_TURN, UNTIL_END_OF_END_PHASE, THIS_BATTLE, UNTIL_START_OF_NEXT_TURN, UNTIL_END_OF_NEXT_TURN, WHILE_VALID, PERMANENT,
+}
+
+@Serializable
+enum class FclReplacementPoint { BEFORE_PROCESSING, DURING_PROCESSING }
+
+@Serializable
+enum class FclReplacementProcedure {
+  ACTIVATION_COST_PAYMENT, LEADER_DAMAGE_PROCESSING, CHARACTER_KO_PROCESSING, EFFECT_REMOVAL_FROM_FIELD, ORDINARY_CARD_MOVEMENT,
+}
+
+@Serializable
+enum class FclReplacedPart {
+  ACTIVATION_COST_PAYMENT, LEADER_DAMAGE, LIFE_TO_HAND_DURING_DAMAGE, CHARACTER_KO, FIELD_REMOVAL_BY_EFFECT, ORDINARY_CARD_MOVEMENT,
+}
+
+@Serializable
+enum class FclReferenceKind {
+  SOURCE, EVENT_OBJECT, PLAYER, AREA, SELECTED_OBJECT, SELECTED_SET, TEXT_DESIGNATED_OBJECT, ATTACKER, ATTACK_TARGET, BATTLE, TOP_CARD, CANDIDATE,
+}
