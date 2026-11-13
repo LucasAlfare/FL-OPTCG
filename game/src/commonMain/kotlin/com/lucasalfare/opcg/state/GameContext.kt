@@ -1,18 +1,16 @@
 package com.lucasalfare.opcg.state
 
-import com.lucasalfare.opcg.core.PlayerId
+import com.lucasalfare.opcg.core.InstanceId
 
-class GameContext(
-  val state: GameState,
-  val currentPlayer: PlayerId,
-  var event: GameEvent? = null,
-  var battle: BattleInfo? = null
-) {
-  val attacker: CardInstance? get() = battle?.attacker
-  val target: CardInstance? get() = battle?.target
-}
+data class BattleId(val value: Int)
 
-data class BattleInfo(
-  val attacker: CardInstance,
-  val target: CardInstance
+data class BattleContext(
+  val id: BattleId,
+  val attacker: InstanceId,
+  val attackTarget: InstanceId,
+)
+
+data class GameContext(
+  val event: GameEvent?,
+  val battle: BattleContext?,
 )
