@@ -1,0 +1,5 @@
+package com.lucasalfare.opcg.flcl.model
+
+enum class FlclPlayerRole {
+  YOU, OPPONENT, TURN_PLAYER, NON_TURN_PLAYER, CONTEXT_PLAYER, OWNER, CONTROLLER, ACTIVATOR, CHOOSER, EXECUTOR, AFFECTED
+}
